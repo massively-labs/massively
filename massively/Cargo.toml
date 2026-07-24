@@ -7,7 +7,7 @@ license.workspace = true
 name = "massively"
 readme = "../README.md"
 repository.workspace = true
-version = "0.90.0"
+version = "0.91.0"
 
 [dependencies]
 cubecl.workspace = true

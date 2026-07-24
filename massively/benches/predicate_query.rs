@@ -17,15 +17,15 @@ type Seven = (u32, u32, u32, u32, u32, u32, u32);
 
 #[cubecl::cube]
 impl PredicateOp<u32> for Even {
-    fn apply(value: u32) -> bool {
-        value % 2u32 == 0u32
+    fn apply(value: u32) -> massively::MFlag {
+        massively::flag::from_bool(value % 2u32 == 0u32)
     }
 }
 
 #[cubecl::cube]
 impl PredicateOp<Seven> for FirstLeafEven {
-    fn apply(value: Seven) -> bool {
-        value.0 % 2u32 == 0u32
+    fn apply(value: Seven) -> massively::MFlag {
+        massively::flag::from_bool(value.0 % 2u32 == 0u32)
     }
 }
 

@@ -28,18 +28,26 @@ impl UnaryOp<u32> for CastU64 {
 
 struct Equal;
 struct Even;
+struct RawFlag;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for Equal {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs == rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs == rhs)
     }
 }
 
 #[cubecl::cube]
 impl PredicateOp<u32> for Even {
-    fn apply(value: u32) -> bool {
-        value % 2u32 == 0u32
+    fn apply(value: u32) -> massively::MFlag {
+        massively::flag::from_bool(value % 2u32 == 0u32)
+    }
+}
+
+#[cubecl::cube]
+impl PredicateOp<u32> for RawFlag {
+    fn apply(value: u32) -> massively::MFlag {
+        value
     }
 }
 
@@ -164,7 +172,7 @@ impl UnaryOp<(u32, u32, u32)> for AddU32Triple {
 
 #[cubecl::cube]
 impl BinaryPredicateOp<Segment<u32>> for LexicographicalBytes {
-    fn apply(lhs: Segment<u32>, rhs: Segment<u32>) -> bool {
+    fn apply(lhs: Segment<u32>, rhs: Segment<u32>) -> massively::MFlag {
         let lhs_len = lhs.len();
         let rhs_len = rhs.len();
         let common_len = if lhs_len < rhs_len { lhs_len } else { rhs_len };
@@ -182,13 +190,13 @@ impl BinaryPredicateOp<Segment<u32>> for LexicographicalBytes {
             cursor.store(cursor.read() + 1u32);
         }
 
-        if ordering.read() == 1u32 {
+        massively::flag::from_bool(if ordering.read() == 1u32 {
             true
         } else if ordering.read() == 2u32 {
             false
         } else {
             lhs_len < rhs_len
-        }
+        })
     }
 }
 
@@ -212,7 +220,7 @@ struct LexicographicalCodes;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<Segment<Code>> for LexicographicalCodes {
-    fn apply(lhs: Segment<Code>, rhs: Segment<Code>) -> bool {
+    fn apply(lhs: Segment<Code>, rhs: Segment<Code>) -> massively::MFlag {
         let lhs_len = lhs.len();
         let rhs_len = rhs.len();
         let common_len = if lhs_len < rhs_len { lhs_len } else { rhs_len };
@@ -230,13 +238,13 @@ impl BinaryPredicateOp<Segment<Code>> for LexicographicalCodes {
             cursor.store(cursor.read() + 1u32);
         }
 
-        if ordering.read() == 1u32 {
+        massively::flag::from_bool(if ordering.read() == 1u32 {
             true
         } else if ordering.read() == 2u32 {
             false
         } else {
             lhs_len < rhs_len
-        }
+        })
     }
 }
 
@@ -244,8 +252,8 @@ struct SlicesEqual;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<Segment<u32>> for SlicesEqual {
-    fn apply(lhs: Segment<u32>, rhs: Segment<u32>) -> bool {
-        if lhs.len() != rhs.len() {
+    fn apply(lhs: Segment<u32>, rhs: Segment<u32>) -> massively::MFlag {
+        massively::flag::from_bool(if lhs.len() != rhs.len() {
             false
         } else {
             let cursor = RuntimeCell::<u32>::new(0u32);
@@ -257,7 +265,7 @@ impl BinaryPredicateOp<Segment<u32>> for SlicesEqual {
                 cursor.store(cursor.read() + 1u32);
             }
             equal.read() != 0u32
-        }
+        })
     }
 }
 
@@ -630,7 +638,7 @@ fn cyclic_segment_context_is_an_entry_parallel_composition() {
 }
 
 #[test]
-fn segmented_boolean_results_are_bool_iterators() {
+fn segmented_boolean_results_are_flag_iterators() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let values = exec.to_device(&[2_u32, 4, 3, 6]);
     let offsets = exec.to_device(&[0_u32, 2, 4]);
@@ -641,13 +649,40 @@ fn segmented_boolean_results_are_bool_iterators() {
         )
         .unwrap();
 
-    fn assert_bool_iter<R: Runtime, Input: MIter<R, Item = bool>>(_input: &Input) {}
-    assert_bool_iter::<WgpuRuntime, _>(&flags);
-    assert_eq!(exec.to_host(&flags).unwrap(), vec![true, false]);
+    fn assert_flag_iter<R: Runtime, Input: MIter<R, Item = massively::MFlag>>(_input: &Input) {}
+    assert_flag_iter::<WgpuRuntime, _>(&flags.slice(..));
+    assert_eq!(
+        exec.to_host(&flags).unwrap(),
+        vec![
+            massively::flag::from_bool(true),
+            massively::flag::from_bool(false)
+        ]
+    );
 
     let input = exec.to_device(&[10_u32, 20]);
     let selected = copy_where(&exec, input.slice(..), flags.slice(..)).unwrap();
     assert_eq!(exec.to_host(&selected).unwrap(), vec![10]);
+}
+
+#[test]
+fn segmented_predicate_summaries_normalize_nonzero_flags() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let values = exec.to_device(&[7_u32, 3, 0]);
+    let offsets = exec.to_device(&[0_u32, 2, 3]);
+    let flags = ForEachSegment(AllOf(RawFlag))
+        .run(
+            &exec,
+            SegmentIterator::new(values.slice(..), offsets.slice(..)),
+        )
+        .unwrap();
+
+    assert_eq!(
+        exec.to_host(&flags).unwrap(),
+        vec![
+            massively::flag::from_bool(true),
+            massively::flag::from_bool(false)
+        ]
+    );
 }
 
 #[test]
@@ -670,7 +705,10 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
     assert_eq!(<_ as MIter<WgpuRuntime>>::len(&rows).unwrap(), 5);
     let lengths = vector_map(&exec, rows.clone(), SliceLength).unwrap();
     assert_eq!(exec.to_host(&lengths).unwrap(), vec![0, 1, 2, 2, 1]);
-    assert!(is_sorted(&exec, rows.clone(), LexicographicalBytes).unwrap());
+    assert_eq!(
+        is_sorted(&exec, rows.clone(), LexicographicalBytes).unwrap(),
+        massively::flag::from_bool(true)
+    );
 
     let lazy_rows = SegmentIterator::new(
         massively::lazy::map(values.slice(..), WrapCode),
@@ -678,17 +716,26 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
     );
     fn assert_lazy_item<R: Runtime, Input: MIter<R, Item = Segment<Code>>>(_input: &Input) {}
     assert_lazy_item::<WgpuRuntime, _>(&lazy_rows);
-    assert!(is_sorted(&exec, lazy_rows, LexicographicalCodes).unwrap());
+    assert_eq!(
+        is_sorted(&exec, lazy_rows, LexicographicalCodes).unwrap(),
+        massively::flag::from_bool(true)
+    );
 
     let middle = rows.slice(1..4);
     assert_eq!(<_ as MIter<WgpuRuntime>>::len(&middle).unwrap(), 3);
-    assert!(is_sorted(&exec, middle, LexicographicalBytes).unwrap());
+    assert_eq!(
+        is_sorted(&exec, middle, LexicographicalBytes).unwrap(),
+        massively::flag::from_bool(true)
+    );
 
     // [ab], [aa]
     let unsorted_values = exec.to_device(&[b'a' as u32, b'b' as u32, b'a' as u32, b'a' as u32]);
     let unsorted_offsets = exec.to_device(&[0_u32, 2, 4]);
     let unsorted = SegmentIterator::new(unsorted_values.slice(..), unsorted_offsets.slice(..));
-    assert!(!is_sorted(&exec, unsorted, LexicographicalBytes).unwrap());
+    assert_eq!(
+        is_sorted(&exec, unsorted, LexicographicalBytes).unwrap(),
+        massively::flag::from_bool(false)
+    );
 
     // The two operands use independent backing expressions and absolute offsets.
     let left_values = exec.to_device(&[1_u32, 2, 3]);
@@ -700,7 +747,10 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
         massively::lazy::map(right_values.slice(..), massively::op::Identity),
         right_offsets.slice(..),
     );
-    assert!(equal(&exec, left, right, SlicesEqual).unwrap());
+    assert_eq!(
+        equal(&exec, left, right, SlicesEqual).unwrap(),
+        massively::flag::from_bool(true)
+    );
 }
 
 #[test]

@@ -3,7 +3,8 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MStorage, MVal, MVec, op::BinaryPredicateOp,
+    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVal, MVec,
+    op::BinaryPredicateOp,
 };
 
 struct UniqueOperation<'a, R: Runtime, Input, Equal> {
@@ -49,8 +50,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Less {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs < rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs < rhs)
 ///     }
 /// }
 ///
@@ -87,8 +88,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Equal {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs == rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs == rhs)
 ///     }
 /// }
 ///
@@ -126,8 +127,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Equal {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs == rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs == rhs)
 ///     }
 /// }
 ///
@@ -187,8 +188,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Less {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs < rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs < rhs)
 ///     }
 /// }
 ///
@@ -227,31 +228,33 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Less {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs < rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs < rhs)
 ///     }
 /// }
 ///
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let input = exec.to_device(&[1_u32, 2, 3, 4]);
 ///
-/// assert!(is_sorted(&exec, input.slice(..), Less).unwrap());
+/// assert!(massively::flag::is_set(
+///     is_sorted(&exec, input.slice(..), Less).unwrap()
+/// ));
 /// ```
 pub fn is_sorted<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     less: Less,
-) -> Result<bool, Error>
+) -> Result<MFlag, Error>
 where
     R: Runtime,
     Input: MIter<R>,
     Less: BinaryPredicateOp<Input::Item>,
 {
-    Ok(
+    Ok(crate::flag::from_bool(
         crate::ordering::is_sorted(exec, crate::api::iter::lower_fixed::<R, _>(input), less)?
             .read(exec)?
             == u32::MAX,
-    )
+    ))
 }
 
 macro_rules! extremum_api {
@@ -290,8 +293,8 @@ struct Less;
 
 #[cubecl::cube]
 impl op::BinaryPredicateOp<u32> for Less {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 
@@ -317,8 +320,8 @@ struct Less;
 
 #[cubecl::cube]
 impl op::BinaryPredicateOp<u32> for Less {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 
@@ -368,8 +371,8 @@ struct Less;
 
 #[cubecl::cube]
 impl op::BinaryPredicateOp<u32> for Less {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 

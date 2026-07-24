@@ -1,8 +1,7 @@
 default:
     @just --list --list-submodules
 
-mod ta 'verification/traversal-algebra'
-mod mp 'verification/massively'
+mod verification 'verification'
 
 doc:
     cargo doc -p massively --no-deps
@@ -19,6 +18,6 @@ test-api:
     cargo doc -p massively --no-deps
     bash scripts/check-public-api.sh
 
-test: test-api ta::proof mp::proof
+test: test-api verification::proof
     cargo nextest run
     cargo test -p massively --doc

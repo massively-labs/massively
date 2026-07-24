@@ -27,8 +27,8 @@ struct LessTriple;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<Triple> for LessTriple {
-    fn apply(lhs: Triple, rhs: Triple) -> bool {
-        lhs.0 < rhs.0
+    fn apply(lhs: Triple, rhs: Triple) -> MFlag {
+        massively::flag::from_bool(lhs.0 < rhs.0)
     }
 }
 
@@ -36,8 +36,8 @@ struct LessU32;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for LessU32 {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 
@@ -52,8 +52,8 @@ impl UnaryOp<Triple> for AddOne {
     }
 }
 
-fn stencil<Input>(input: Input) -> lazy::Map<Input, NonZero> {
-    lazy::map(input, NonZero)
+fn stencil<Input>(input: Input) -> Input {
+    input
 }
 
 #[test]

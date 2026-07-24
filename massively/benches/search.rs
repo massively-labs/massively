@@ -8,8 +8,8 @@ struct Less;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for Less {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 

@@ -39,6 +39,7 @@
 //! - [`zip2`] through [`zip12`] combine columns into native flat row tuples.
 //! - [`lazy`] provides allocation-free sources and adapters.
 //! - [`op`] contains reusable GPU operations such as [`op::Identity`].
+//! - [`flag`] converts between CubeCL conditions and [`MFlag`].
 //!
 //! # Synchronization model
 //!
@@ -53,7 +54,7 @@
 
 mod api;
 mod core;
-pub mod graph;
+pub mod flag;
 pub mod seg;
 pub mod vector;
 
@@ -81,6 +82,13 @@ pub(crate) use core::{
 /// This is an alias of `u32`.
 pub type MIndex = u32;
 
+/// Truth flag used by Massively algorithms and device storage.
+///
+/// Consumers interpret zero as false and every non-zero value as true. Use
+/// [`flag::from_bool()`] to construct a canonical flag and [`flag::is_set()`]
+/// to test one.
+pub type MFlag = u32;
+
 pub use api::iter::{
     MAlloc, MIter, MIterMut, MStorage, MVec, RadixKey, zip2, zip3, zip4, zip5, zip6, zip7, zip8,
     zip9, zip10, zip11, zip12,
@@ -93,8 +101,8 @@ pub use api::{Error, lazy, op, util};
 /// Common public data and operation types.
 pub mod prelude {
     pub use crate::{
-        DeviceSlice, DeviceSliceMut, DeviceVec, Executor, MAlloc, MIndex, MIter, MIterMut,
+        DeviceSlice, DeviceSliceMut, DeviceVec, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut,
         MStorage, MVec, RadixKey, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10, zip11,
-        zip12,
+        zip12,op,flag,
     };
 }

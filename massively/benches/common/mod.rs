@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use criterion::Criterion;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-use massively::{Executor, lazy, op::NonZero};
+use massively::Executor;
 
 pub const SIZES: &[usize] = &[1_024, 16 * 1_024, 256 * 1_024, 1_024 * 1_024];
 pub const SORT_SIZES: &[usize] = &[1_024, 16 * 1_024, 256 * 1_024, 1_024 * 1_024];
@@ -42,8 +42,8 @@ pub fn as_indices<Input>(input: Input) -> Input {
     input
 }
 
-pub fn as_stencil<Input>(input: Input) -> lazy::Map<Input, NonZero> {
-    lazy::map(input, NonZero)
+pub fn as_stencil<Input>(input: Input) -> Input {
+    input
 }
 
 pub fn run_keys(len: usize, run_len: usize) -> Vec<u32> {

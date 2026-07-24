@@ -1,6 +1,6 @@
 use cubecl::prelude::Runtime;
 
-use crate::{Error, Executor, MIndex, MIter, MIterMut, MVec, op::BinaryPredicateOp};
+use crate::{Error, Executor, MFlag, MIndex, MIter, MIterMut, MVec, op::BinaryPredicateOp};
 
 /// Finds the first source item equal to any needle.
 ///
@@ -15,8 +15,8 @@ use crate::{Error, Executor, MIndex, MIter, MIterMut, MVec, op::BinaryPredicateO
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Equal {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs == rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs == rhs)
 ///     }
 /// }
 ///
@@ -65,8 +65,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Less {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs < rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs < rhs)
 ///     }
 /// }
 ///
@@ -142,8 +142,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Less {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs < rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs < rhs)
 ///     }
 /// }
 ///
@@ -217,8 +217,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Equal {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs == rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs == rhs)
 ///     }
 /// }
 ///
@@ -226,14 +226,16 @@ where
 /// let left = exec.to_device(&[1_u32, 2, 3]);
 /// let right = exec.to_device(&[1_u32, 2, 3]);
 ///
-/// assert!(equal(&exec, left.slice(..), right.slice(..), Equal).unwrap());
+/// assert!(massively::flag::is_set(
+///     equal(&exec, left.slice(..), right.slice(..), Equal).unwrap()
+/// ));
 /// ```
 pub fn equal<R, Left, Right, Equal>(
     exec: &Executor<R>,
     left: Left,
     right: Right,
     equal: Equal,
-) -> Result<bool, Error>
+) -> Result<MFlag, Error>
 where
     R: Runtime,
     Left: MIter<R>,
@@ -249,7 +251,9 @@ where
         equal,
     )?
     .read(exec)?;
-    Ok(left_len == right_len && mismatch >= left_len.min(right_len))
+    Ok(crate::flag::from_bool(
+        left_len == right_len && mismatch >= left_len.min(right_len),
+    ))
 }
 
 /// Returns the first mismatch.
@@ -265,8 +269,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Equal {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs == rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs == rhs)
 ///     }
 /// }
 ///
@@ -314,8 +318,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Less {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs < rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs < rhs)
 ///     }
 /// }
 ///
@@ -323,26 +327,30 @@ where
 /// let left = exec.to_device(&[1_u32, 2, 3]);
 /// let right = exec.to_device(&[1_u32, 3, 0]);
 ///
-/// assert!(lexicographical_compare(&exec, left.slice(..), right.slice(..), Less).unwrap());
+/// assert!(massively::flag::is_set(
+///     lexicographical_compare(&exec, left.slice(..), right.slice(..), Less).unwrap()
+/// ));
 /// ```
 pub fn lexicographical_compare<R, Left, Right, Less>(
     exec: &Executor<R>,
     left: Left,
     right: Right,
     less: Less,
-) -> Result<bool, Error>
+) -> Result<MFlag, Error>
 where
     R: Runtime,
     Left: MIter<R>,
     Right: MIter<R, Item = Left::Item>,
     Less: BinaryPredicateOp<Left::Item>,
 {
-    Ok(crate::search::lexicographical_compare(
-        exec,
-        crate::api::iter::lower_fixed::<R, _>(left),
-        crate::api::iter::lower_fixed::<R, _>(right),
-        less,
-    )?
-    .read(exec)?
-        != 0)
+    Ok(crate::flag::from_bool(
+        crate::search::lexicographical_compare(
+            exec,
+            crate::api::iter::lower_fixed::<R, _>(left),
+            crate::api::iter::lower_fixed::<R, _>(right),
+            less,
+        )?
+        .read(exec)?
+            != 0,
+    ))
 }

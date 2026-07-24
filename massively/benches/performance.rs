@@ -27,29 +27,29 @@ struct SumF32;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for EqualU32 {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs == rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs == rhs)
     }
 }
 
 #[cubecl::cube]
 impl PredicateOp<u32> for EvenIndex {
-    fn apply(value: u32) -> bool {
-        value % 2u32 == 0u32
+    fn apply(value: u32) -> massively::MFlag {
+        massively::flag::from_bool(value % 2u32 == 0u32)
     }
 }
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for LessU32 {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for LessIndex {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 
@@ -64,8 +64,8 @@ impl UnaryOp<f32> for MulTwo {
 
 #[cubecl::cube]
 impl PredicateOp<f32> for PositiveF32 {
-    fn apply(input: f32) -> bool {
-        input > 0.0
+    fn apply(input: f32) -> massively::MFlag {
+        massively::flag::from_bool(input > 0.0)
     }
 }
 

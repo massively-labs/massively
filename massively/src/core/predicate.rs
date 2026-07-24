@@ -4,7 +4,8 @@ use core::marker::PhantomData;
 use cubecl::prelude::*;
 
 use crate::{
-    DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, MIndex, MVal, ReadExpression, Transform,
+    DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MVal, ReadExpression,
+    Transform,
     op::{IndexedBinaryOp, IndexedUnaryOp, UnaryOp},
     output::StageOutput,
     read::{AdjacentIndexedTransform, Env0, Env1, IndexedTransform, LowerReadExpression},
@@ -13,7 +14,7 @@ use crate::{
     transform::{MaterializeDispatch, transform},
 };
 
-/// Compile-time predicate applied to one semantic input item.
+/// Compile-time flag predicate applied to one semantic input item.
 ///
 /// # Examples
 ///
@@ -26,8 +27,8 @@ use crate::{
 ///
 /// #[cubecl::cube]
 /// impl op::PredicateOp<i32> for Positive {
-///     fn apply(value: i32) -> bool {
-///         value > 0
+///     fn apply(value: i32) -> massively::MFlag {
+///         massively::flag::from_bool(value > 0)
 ///     }
 /// }
 ///
@@ -39,7 +40,7 @@ use crate::{
 /// ```
 #[cubecl::cube]
 pub trait PredicateOp<Input: CubeType>: 'static + Send + Sync {
-    fn apply(input: Input) -> bool;
+    fn apply(input: Input) -> MFlag;
 }
 
 #[cubecl::cube]
@@ -48,7 +49,7 @@ where
     Input: CubeType + 'static,
     Pred: PredicateOp<Input>,
 {
-    Pred::apply(input)
+    crate::flag::is_set(Pred::apply(input))
 }
 
 #[doc(hidden)]
@@ -60,10 +61,10 @@ where
     Input: CubeType + 'static,
     Pred: PredicateOp<Input>,
 {
-    type Output = u32;
+    type Output = MFlag;
 
-    fn apply(input: Input) -> u32 {
-        crate::op::bool_flag(Pred::apply(input))
+    fn apply(input: Input) -> MFlag {
+        crate::flag::from_bool(crate::flag::is_set(Pred::apply(input)))
     }
 }
 
@@ -146,7 +147,7 @@ pub trait PredicateInput<R: Runtime, Pred>: ReadExpression + Sized {
     fn predicate_first(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
     fn predicate_is_partitioned(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
     fn predicate_positions(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
-    fn predicate_flags(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
+    fn predicate_flags(self, exec: &Executor<R>) -> Result<DeviceVec<R, MFlag>, Error>;
 }
 
 impl<R, Input, Pred> PredicateInput<R, Pred> for Input
@@ -155,16 +156,16 @@ where
     Input: ReadExpression + StageRead<R, Env0>,
     Pred: PredicateOp<Input::Item>,
     Transform<Input, PredicateMap<Pred>>:
-        ReadExpression<Item = u32> + LowerReadExpression + StageRead<R, Env0>,
+        ReadExpression<Item = MFlag> + LowerReadExpression + StageRead<R, Env0>,
     Dispatch<crate::A13, crate::S12>:
         MaterializeDispatch<
                 R,
                 Transform<Input, PredicateMap<Pred>>,
-                DeviceSliceMut<u32>,
+                DeviceSliceMut<MFlag>,
                 crate::read::KernelReadSlots<
                     <Transform<Input, PredicateMap<Pred>> as LowerReadExpression>::Slots,
                 >,
-                crate::output::KernelOutputSlots<Env1<u32>>,
+                crate::output::KernelOutputSlots<Env1<MFlag>>,
             >,
     IndexedTransform<Input, FirstMatchingIndex<Pred>>:
         ReadExpression<Item = u32> + LowerReadExpression + StageRead<R, Env0>,
@@ -260,10 +261,10 @@ where
         Ok(positions)
     }
 
-    fn predicate_flags(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error> {
+    fn predicate_flags(self, exec: &Executor<R>) -> Result<DeviceVec<R, MFlag>, Error> {
         let len = self.logical_len()?;
         let extent = self.logical_extent()?;
-        let mut flags = exec.alloc_row::<u32>(len);
+        let mut flags = exec.alloc_row::<MFlag>(len);
         flags.set_logical_extent(extent);
         transform(
             exec,
@@ -324,8 +325,8 @@ mod tests {
 
     #[cubecl::cube]
     impl PredicateOp<(u32, u32, u32)> for MatchTriple {
-        fn apply(input: (u32, u32, u32)) -> bool {
-            input.0 + input.1 == input.2
+        fn apply(input: (u32, u32, u32)) -> MFlag {
+            crate::flag::from_bool(input.0 + input.1 == input.2)
         }
     }
 
@@ -387,9 +388,36 @@ mod tests {
 
     #[cubecl::cube]
     impl PredicateOp<u32> for IsEven {
-        fn apply(input: u32) -> bool {
-            input % 2u32 == 0u32
+        fn apply(input: u32) -> MFlag {
+            crate::flag::from_bool(input % 2u32 == 0u32)
         }
+    }
+
+    struct RawFlag;
+
+    #[cubecl::cube]
+    impl PredicateOp<u32> for RawFlag {
+        fn apply(input: u32) -> MFlag {
+            input
+        }
+    }
+
+    #[test]
+    fn predicate_consumers_normalize_nonzero_flags() {
+        let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+        let input = exec.to_device(&[7_u32, 0, 3]);
+        let flags =
+            <_ as PredicateInput<WgpuRuntime, RawFlag>>::predicate_flags(input.column(), &exec)
+                .unwrap();
+
+        assert_eq!(exec.to_host(&flags).unwrap(), vec![1, 0, 1]);
+        assert_eq!(
+            count_if(&exec, input.column(), RawFlag)
+                .unwrap()
+                .read(&exec)
+                .unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -435,8 +463,8 @@ mod tests {
 
     #[cubecl::cube]
     impl PredicateOp<Seven> for LastLeafIsThree {
-        fn apply(input: Seven) -> bool {
-            input.6 == 3
+        fn apply(input: Seven) -> MFlag {
+            crate::flag::from_bool(input.6 == 3)
         }
     }
 
@@ -476,8 +504,8 @@ mod tests {
 
     #[cubecl::cube]
     impl PredicateOp<u32> for Never {
-        fn apply(_input: u32) -> bool {
-            false
+        fn apply(_input: u32) -> MFlag {
+            crate::flag::from_bool(false)
         }
     }
 

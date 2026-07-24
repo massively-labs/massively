@@ -1313,15 +1313,15 @@ mod tests {
 
     #[cubecl::cube]
     impl crate::op::BinaryPredicateOp<ReadOnlyValue> for ReadOnlyEqual {
-        fn apply(lhs: ReadOnlyValue, rhs: ReadOnlyValue) -> bool {
-            lhs.value == rhs.value
+        fn apply(lhs: ReadOnlyValue, rhs: ReadOnlyValue) -> crate::MFlag {
+            crate::flag::from_bool(lhs.value == rhs.value)
         }
     }
 
     #[cubecl::cube]
     impl crate::op::BinaryPredicateOp<ReadOnlyValue> for ReadOnlyLess {
-        fn apply(lhs: ReadOnlyValue, rhs: ReadOnlyValue) -> bool {
-            lhs.value < rhs.value
+        fn apply(lhs: ReadOnlyValue, rhs: ReadOnlyValue) -> crate::MFlag {
+            crate::flag::from_bool(lhs.value < rhs.value)
         }
     }
 
@@ -1364,7 +1364,10 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let keys = crate::read::Transform::new(crate::Counting::new(7, 3), MakeReadOnly);
 
-        assert!(crate::vector::is_sorted(&exec, keys, ReadOnlyLess).unwrap());
+        assert_eq!(
+            crate::vector::is_sorted(&exec, keys, ReadOnlyLess).unwrap(),
+            crate::flag::from_bool(true)
+        );
     }
 
     #[test]
@@ -1455,6 +1458,9 @@ mod tests {
         let right_values = exec.to_device(&[7_u64, 8, 9]);
         let right = crate::read::Transform::new(right_values.column(), MakeReadOnlyFromU64);
 
-        assert!(crate::vector::equal(&exec, left, right, ReadOnlyEqual).unwrap());
+        assert_eq!(
+            crate::vector::equal(&exec, left, right, ReadOnlyEqual).unwrap(),
+            crate::flag::from_bool(true)
+        );
     }
 }

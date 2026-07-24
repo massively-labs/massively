@@ -9,8 +9,8 @@ use massively::{
 struct Positive;
 #[cubecl::cube]
 impl PredicateOp<f32> for Positive {
-    fn apply(input: f32) -> bool {
-        input > 0.0
+    fn apply(input: f32) -> massively::MFlag {
+        massively::flag::from_bool(input > 0.0)
     }
 }
 

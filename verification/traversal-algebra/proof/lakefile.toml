@@ -1,6 +1,0 @@
-name = "traversal-algebra"
-version = "0.1.0"
-defaultTargets = ["TraversalAlgebra"]
-
-[[lean_lib]]
-name = "TraversalAlgebra"

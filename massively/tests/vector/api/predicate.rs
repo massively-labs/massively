@@ -6,8 +6,8 @@ struct Even;
 
 #[cubecl::cube]
 impl PredicateOp<MIndex> for Even {
-    fn apply(value: MIndex) -> bool {
-        value % 2u32 == 0u32
+    fn apply(value: MIndex) -> massively::MFlag {
+        massively::flag::from_bool(value % 2u32 == 0u32)
     }
 }
 

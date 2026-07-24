@@ -130,8 +130,8 @@ pub(crate) struct LessU32;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for LessU32 {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> crate::MFlag {
+        crate::flag::from_bool(lhs < rhs)
     }
 }
 

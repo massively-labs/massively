@@ -1,5 +1,0 @@
-[build]
-# A single high-arity CubeCL crate can use substantial memory while rustc
-# expands its kernels. Keep workspace builds deterministic and below the
-# machine limit instead of compiling lib/test targets concurrently.
-jobs = 1

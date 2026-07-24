@@ -1,6 +1,6 @@
 use cubecl::prelude::{CubeType, Runtime};
 
-use crate::{Error, Executor, MAlloc, MIter, MIterMut, MStorage, MVec};
+use crate::{Error, Executor, MAlloc, MFlag, MIter, MIterMut, MStorage, MVec};
 
 struct GatherOperation<'a, R: Runtime, Values, Indices> {
     exec: &'a Executor<R>,
@@ -118,7 +118,7 @@ where
     Item: CubeType + Send + Sync + 'static,
     Values: MIter<R, Item = Item>,
     Indices: MIter<R, Item = crate::MIndex>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
 {
     type Result = Result<(), Error>;
 
@@ -215,20 +215,19 @@ where
 ///
 /// ```
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, lazy, op, vector::gather_where};
+/// use massively::{Executor, vector::gather_where};
 ///
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let values = exec.to_device(&[10_u32, 20, 30]);
 /// let indices = exec.to_device(&[2_u32, 0, 1]);
 /// let stencil = exec.to_device(&[1_u32, 0, 1]);
 /// let output = exec.to_device(&[99_u32, 99, 99]);
-/// let stencil = lazy::map(stencil.slice(..), op::NonZero);
 ///
 /// gather_where(
 ///     &exec,
 ///     values.slice(..),
 ///     indices.slice(..),
-///     stencil,
+///     stencil.slice(..),
 ///     output.slice_mut(..),
 /// )
 /// .unwrap();
@@ -246,7 +245,7 @@ where
     R: Runtime,
     Values: MIter<R, Item = Output::Item>,
     Indices: MIter<R, Item = crate::MIndex>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
     let indices_len = indices.capacity()?;
@@ -338,7 +337,7 @@ mod tests {
             &exec,
             values.slice(..),
             encoded_indices.slice(..),
-            crate::lazy::map(encoded_stencil.slice(..), crate::op::NonZero),
+            encoded_stencil.slice(..),
             output.slice_mut(..),
         )
         .unwrap();

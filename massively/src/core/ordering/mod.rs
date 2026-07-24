@@ -5,7 +5,8 @@ use core::marker::PhantomData;
 use cubecl::prelude::*;
 
 use crate::{
-    A13, DeviceVec, Dispatch, Error, Executor, MIndex, MStorageElement, MVal, ReadExpression,
+    A13, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MStorageElement, MVal,
+    ReadExpression,
     arg_reduce::{ArgReduceDispatch, ArgReductionOp, arg_reduce},
     eval::Eval13,
     launch::cube_count_1d,
@@ -40,8 +41,8 @@ const SORT_MERGE_ITEMS: usize = 64;
 ///
 /// #[cubecl::cube]
 /// impl op::BinaryPredicateOp<u32> for Less {
-///     fn apply(lhs: u32, rhs: u32) -> bool {
-///         lhs < rhs
+///     fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+///         massively::flag::from_bool(lhs < rhs)
 ///     }
 /// }
 ///
@@ -53,7 +54,7 @@ const SORT_MERGE_ITEMS: usize = 64;
 /// ```
 #[cubecl::cube]
 pub trait BinaryPredicateOp<Item: CubeType>: 'static + Send + Sync {
-    fn apply(lhs: Item, rhs: Item) -> bool;
+    fn apply(lhs: Item, rhs: Item) -> MFlag;
 }
 
 #[cubecl::cube]
@@ -62,7 +63,7 @@ where
     Item: CubeType + 'static,
     Op: BinaryPredicateOp<Item>,
 {
-    Op::apply(lhs, rhs)
+    crate::flag::is_set(Op::apply(lhs, rhs))
 }
 
 #[cubecl::cube]
@@ -1240,8 +1241,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<Seven> for LexicographicLess {
-        fn apply(lhs: Seven, rhs: Seven) -> bool {
-            lhs.0 < rhs.0
+        fn apply(lhs: Seven, rhs: Seven) -> MFlag {
+            crate::flag::from_bool(lhs.0 < rhs.0)
         }
     }
 
@@ -1249,14 +1250,16 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<Seven> for EqualSeven {
-        fn apply(lhs: Seven, rhs: Seven) -> bool {
-            lhs.0 == rhs.0
-                && lhs.1 == rhs.1
-                && lhs.2 == rhs.2
-                && lhs.3 == rhs.3
-                && lhs.4 == rhs.4
-                && lhs.5 == rhs.5
-                && lhs.6 == rhs.6
+        fn apply(lhs: Seven, rhs: Seven) -> MFlag {
+            crate::flag::from_bool(
+                lhs.0 == rhs.0
+                    && lhs.1 == rhs.1
+                    && lhs.2 == rhs.2
+                    && lhs.3 == rhs.3
+                    && lhs.4 == rhs.4
+                    && lhs.5 == rhs.5
+                    && lhs.6 == rhs.6,
+            )
         }
     }
 
@@ -1264,8 +1267,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<u32> for LessU32 {
-        fn apply(lhs: u32, rhs: u32) -> bool {
-            lhs < rhs
+        fn apply(lhs: u32, rhs: u32) -> MFlag {
+            crate::flag::from_bool(lhs < rhs)
         }
     }
 

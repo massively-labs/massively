@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 
 use crate::{
-    Error, Executor, MAlloc, MIter, MIterMut, MVal, RowStorage,
+    Error, Executor, MAlloc, MFlag, MIter, MIterMut, MVal, RowStorage,
     op::{BinaryPredicateOp, ReductionOp},
 };
 
@@ -9,8 +9,8 @@ struct IndexLess;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<crate::MIndex> for IndexLess {
-    fn apply(lhs: crate::MIndex, rhs: crate::MIndex) -> bool {
-        lhs < rhs
+    fn apply(lhs: crate::MIndex, rhs: crate::MIndex) -> MFlag {
+        crate::flag::from_bool(lhs < rhs)
     }
 }
 
@@ -18,8 +18,8 @@ struct IndexEqual;
 
 #[cubecl::cube]
 impl BinaryPredicateOp<crate::MIndex> for IndexEqual {
-    fn apply(lhs: crate::MIndex, rhs: crate::MIndex) -> bool {
-        lhs == rhs
+    fn apply(lhs: crate::MIndex, rhs: crate::MIndex) -> MFlag {
+        crate::flag::from_bool(lhs == rhs)
     }
 }
 
@@ -101,7 +101,7 @@ where
     Item: CubeType + Send + Sync + 'static,
     Values: MIter<R, Item = Item>,
     Indices: MIter<R, Item = crate::MIndex>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
 {
     type Result = Result<(), Error>;
 
@@ -293,20 +293,19 @@ where
 ///
 /// ```
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, lazy, op, vector::scatter_where};
+/// use massively::{Executor, vector::scatter_where};
 ///
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let values = exec.to_device(&[10_u32, 20, 30]);
 /// let indices = exec.to_device(&[2_u32, 0, 1]);
 /// let stencil = exec.to_device(&[1_u32, 0, 1]);
 /// let output = exec.to_device(&[99_u32, 99, 99]);
-/// let stencil = lazy::map(stencil.slice(..), op::NonZero);
 ///
 /// scatter_where(
 ///     &exec,
 ///     values.slice(..),
 ///     indices.slice(..),
-///     stencil,
+///     stencil.slice(..),
 ///     output.slice_mut(..),
 /// )
 /// .unwrap();
@@ -324,7 +323,7 @@ where
     R: Runtime,
     Values: MIter<R, Item = Output::Item>,
     Indices: MIter<R, Item = crate::MIndex>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
     output.run_output_operation(ScatterWhereOperation {

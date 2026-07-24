@@ -3,8 +3,8 @@
 use cubecl::prelude::*;
 
 use crate::{
-    A1, Column, Constant, DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, ReadExpression,
-    RowStorage, S1, StorageLayout, Transform, Zip,
+    A1, Column, Constant, DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, MFlag,
+    ReadExpression, RowStorage, S1, StorageLayout, Transform, Zip,
     indexed::GatherInput,
     op::UnaryOp,
     output::{LowerOutputExpression, OutputExpression, SliceOutput, StageOutput},
@@ -58,20 +58,20 @@ fn partition_permutation_kernel(
 struct IsTrue;
 
 #[cubecl::cube]
-impl UnaryOp<bool> for IsTrue {
-    type Output = u32;
-    fn apply(input: bool) -> u32 {
-        if input { 1u32 } else { 0u32 }
+impl UnaryOp<MFlag> for IsTrue {
+    type Output = MFlag;
+    fn apply(input: MFlag) -> MFlag {
+        crate::flag::from_bool(crate::flag::is_set(input))
     }
 }
 
 struct IsFalse;
 
 #[cubecl::cube]
-impl UnaryOp<bool> for IsFalse {
-    type Output = u32;
-    fn apply(input: bool) -> u32 {
-        if input { 0u32 } else { 1u32 }
+impl UnaryOp<MFlag> for IsFalse {
+    type Output = MFlag;
+    fn apply(input: MFlag) -> MFlag {
+        crate::flag::from_bool(!crate::flag::is_set(input))
     }
 }
 
@@ -155,7 +155,7 @@ where
 
 /// Internal capability to consume a logical stencil expression.
 #[doc(hidden)]
-pub trait FlagInput<R: Runtime>: ReadExpression<Item = bool> + Sized {
+pub trait FlagInput<R: Runtime>: ReadExpression<Item = MFlag> + Sized {
     fn flag_len(&self) -> Result<usize, Error>;
     fn flag_extent(&self) -> Result<crate::extent::LogicalExtent, Error>;
     fn selected_control(self, exec: &Executor<R>) -> Result<SelectionControl<R>, Error>;
@@ -165,11 +165,11 @@ pub trait FlagInput<R: Runtime>: ReadExpression<Item = bool> + Sized {
 impl<R, Stencil> FlagInput<R> for Stencil
 where
     R: Runtime,
-    Stencil: ReadExpression<Item = bool> + LowerReadExpression + StageRead<R, Env0>,
+    Stencil: ReadExpression<Item = MFlag> + LowerReadExpression + StageRead<R, Env0>,
     Transform<Stencil, IsTrue>:
-        ReadExpression<Item = u32> + LowerReadExpression + StageRead<R, Env0>,
+        ReadExpression<Item = MFlag> + LowerReadExpression + StageRead<R, Env0>,
     Transform<Stencil, IsFalse>:
-        ReadExpression<Item = u32> + LowerReadExpression + StageRead<R, Env0>,
+        ReadExpression<Item = MFlag> + LowerReadExpression + StageRead<R, Env0>,
     Dispatch<crate::A13, crate::S12>: InclusiveScanDispatch<
             R,
             Transform<Stencil, IsTrue>,
@@ -596,10 +596,6 @@ mod tests {
     use crate::{Counting, Permute, Zip};
     use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 
-    fn bool_flags<Input>(input: Input) -> Transform<Input, crate::op::NonZero> {
-        Transform::new(input, crate::op::NonZero)
-    }
-
     #[test]
     fn copy_where_preserves_flat_three_column_rows() {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
@@ -616,7 +612,7 @@ mod tests {
             out_c.slice_mut(..),
         );
 
-        let count = copy_where(&exec, input, bool_flags(flags.column()), output).unwrap();
+        let count = copy_where(&exec, input, flags.column(), output).unwrap();
         let count = exec.to_host(&count).unwrap()[0];
         assert_eq!(count, 2);
         assert_eq!(exec.to_host(&out_a.slice(..count)).unwrap(), vec![2, 3]);
@@ -634,7 +630,7 @@ mod tests {
         let positions = exec.alloc_row::<u32>(4);
         inclusive_scan(
             &exec,
-            Transform::new(bool_flags(flags.column()), IsTrue),
+            Transform::new(flags.column(), IsTrue),
             SumU32,
             positions.slice_mut(..),
         )
@@ -683,7 +679,7 @@ mod tests {
             outputs[6].slice_mut(..),
         );
 
-        let count = copy_where(&exec, input, bool_flags(flags.column()), output).unwrap();
+        let count = copy_where(&exec, input, flags.column(), output).unwrap();
         assert_eq!(exec.to_host(&count).unwrap(), vec![2]);
         for (column, output) in outputs.iter().enumerate() {
             assert_eq!(
@@ -699,13 +695,8 @@ mod tests {
         let input = exec.to_device(&[10_u32, 20, 30, 40]);
         let flags = exec.to_device(&[0_u32, 1, 0, 1]);
         let output = exec.to_device(&[0_u32; 4]);
-        let count = remove_where(
-            &exec,
-            input.column(),
-            bool_flags(flags.column()),
-            output.slice_mut(..),
-        )
-        .unwrap();
+        let count =
+            remove_where(&exec, input.column(), flags.column(), output.slice_mut(..)).unwrap();
         let count = exec.to_host(&count).unwrap()[0];
         assert_eq!(count, 2);
         assert_eq!(exec.to_host(&output.slice(..2)).unwrap(), vec![10, 30]);
@@ -715,8 +706,8 @@ mod tests {
 
     #[cubecl::cube]
     impl crate::op::PredicateOp<u32> for IsEven {
-        fn apply(input: u32) -> bool {
-            input % 2u32 == 0u32
+        fn apply(input: u32) -> MFlag {
+            crate::flag::from_bool(input % 2u32 == 0u32)
         }
     }
 
@@ -740,13 +731,7 @@ mod tests {
         let output = || Zip::new(Zip::new(a.slice_mut(..), b.slice_mut(..)), c.slice_mut(..));
         fill(&exec, (7_u32, 2.5_f32, -3_i32), output()).unwrap();
         let flags = exec.to_device(&[0_u32, 1, 0, 1]);
-        replace_where(
-            &exec,
-            (9_u32, 4.5_f32, -8_i32),
-            bool_flags(flags.column()),
-            output(),
-        )
-        .unwrap();
+        replace_where(&exec, (9_u32, 4.5_f32, -8_i32), flags.column(), output()).unwrap();
         assert_eq!(exec.to_host(&a).unwrap(), vec![7, 9, 7, 9]);
         assert_eq!(exec.to_host(&b).unwrap(), vec![2.5, 4.5, 2.5, 4.5]);
         assert_eq!(exec.to_host(&c).unwrap(), vec![-3, -8, -3, -8]);
@@ -814,14 +799,7 @@ mod tests {
             outputs[6].slice_mut(..),
         );
 
-        transform_where(
-            &exec,
-            input,
-            IncrementSeven,
-            bool_flags(stencil.column()),
-            output,
-        )
-        .unwrap();
+        transform_where(&exec, input, IncrementSeven, stencil.column(), output).unwrap();
         for (column, output) in outputs.iter().enumerate() {
             assert_eq!(
                 exec.to_host(output).unwrap(),

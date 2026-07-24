@@ -1254,8 +1254,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<u32> for LessU32 {
-        fn apply(lhs: u32, rhs: u32) -> bool {
-            lhs < rhs
+        fn apply(lhs: u32, rhs: u32) -> crate::MFlag {
+            crate::flag::from_bool(lhs < rhs)
         }
     }
 
@@ -1318,8 +1318,8 @@ mod tests {
         struct LessPair;
         #[cubecl::cube]
         impl BinaryPredicateOp<(u32, u32)> for LessPair {
-            fn apply(lhs: (u32, u32), rhs: (u32, u32)) -> bool {
-                lhs.0 < rhs.0
+            fn apply(lhs: (u32, u32), rhs: (u32, u32)) -> crate::MFlag {
+                crate::flag::from_bool(lhs.0 < rhs.0)
             }
         }
         merge_direct(

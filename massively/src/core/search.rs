@@ -111,9 +111,9 @@ fn lexicographical_result_kernel(
     if ABSOLUTE_POS == 0 {
         let index = best[0];
         output[0] = if index < shared_len[0] {
-            crate::op::bool_flag(codes[index as usize] == 1u32)
+            crate::flag::from_bool(codes[index as usize] == 1u32)
         } else {
-            crate::op::bool_flag(left_is_shorter[0] != 0u32)
+            crate::flag::from_bool(left_is_shorter[0] != 0u32)
         };
     }
 }
@@ -912,14 +912,16 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<Seven> for EqualSeven {
-        fn apply(lhs: Seven, rhs: Seven) -> bool {
-            lhs.0 == rhs.0
-                && lhs.1 == rhs.1
-                && lhs.2 == rhs.2
-                && lhs.3 == rhs.3
-                && lhs.4 == rhs.4
-                && lhs.5 == rhs.5
-                && lhs.6 == rhs.6
+        fn apply(lhs: Seven, rhs: Seven) -> crate::MFlag {
+            crate::flag::from_bool(
+                lhs.0 == rhs.0
+                    && lhs.1 == rhs.1
+                    && lhs.2 == rhs.2
+                    && lhs.3 == rhs.3
+                    && lhs.4 == rhs.4
+                    && lhs.5 == rhs.5
+                    && lhs.6 == rhs.6,
+            )
         }
     }
 
@@ -927,8 +929,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<Seven> for LessSeven {
-        fn apply(lhs: Seven, rhs: Seven) -> bool {
-            lhs.0 < rhs.0
+        fn apply(lhs: Seven, rhs: Seven) -> crate::MFlag {
+            crate::flag::from_bool(lhs.0 < rhs.0)
         }
     }
 
@@ -936,8 +938,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<u32> for EqualU32 {
-        fn apply(lhs: u32, rhs: u32) -> bool {
-            lhs == rhs
+        fn apply(lhs: u32, rhs: u32) -> crate::MFlag {
+            crate::flag::from_bool(lhs == rhs)
         }
     }
 
@@ -945,8 +947,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<u32> for LessU32 {
-        fn apply(lhs: u32, rhs: u32) -> bool {
-            lhs < rhs
+        fn apply(lhs: u32, rhs: u32) -> crate::MFlag {
+            crate::flag::from_bool(lhs < rhs)
         }
     }
 
@@ -1004,21 +1006,23 @@ mod tests {
             )
         };
 
-        assert!(
-            !crate::api::algorithm::equal(&exec, make_left(), make_right(), EqualSeven).unwrap()
+        assert_eq!(
+            crate::api::algorithm::equal(&exec, make_left(), make_right(), EqualSeven).unwrap(),
+            crate::flag::from_bool(false)
         );
         assert_eq!(
             crate::api::algorithm::mismatch(&exec, make_left(), make_right(), EqualSeven).unwrap(),
             Some(1)
         );
-        assert!(
+        assert_eq!(
             crate::api::algorithm::lexicographical_compare(
                 &exec,
                 make_left(),
                 make_right(),
                 LessSeven,
             )
-            .unwrap()
+            .unwrap(),
+            crate::flag::from_bool(true)
         );
     }
 
@@ -1081,14 +1085,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(exec.to_host(&codes).unwrap(), vec![2]);
-        assert!(
-            !crate::api::algorithm::lexicographical_compare(
+        assert_eq!(
+            crate::api::algorithm::lexicographical_compare(
                 &exec,
                 left.column(),
                 right.column(),
                 LessU32,
             )
-            .unwrap()
+            .unwrap(),
+            crate::flag::from_bool(false)
         );
     }
 }

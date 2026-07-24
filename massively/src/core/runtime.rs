@@ -283,11 +283,11 @@ impl<R: Runtime, T> DeviceVec<R, T> {
     ///
     /// ```
     /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-    /// use massively::{Executor, lazy, op, vector::replace_where};
+    /// use massively::{Executor, lazy, vector::replace_where};
     ///
     /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     /// let values = exec.to_device(&[1_u32, 2, 3, 4]);
-    /// let stencil = lazy::map(lazy::constant(1_u32).take(2), op::NonZero);
+    /// let stencil = lazy::constant(1_u32).take(2);
     /// replace_where(&exec, 9_u32, stencil, values.slice_mut(1..3)).unwrap();
     ///
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![1, 9, 9, 4]);
@@ -446,12 +446,12 @@ impl<T> DeviceSliceMut<T> {
     ///
     /// ```
     /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-    /// use massively::{Executor, lazy, op, vector::replace_where};
+    /// use massively::{Executor, lazy, vector::replace_where};
     ///
     /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     /// let values = exec.to_device(&[1_u32, 2, 3, 4, 5]);
     /// let writable = values.slice_mut(1..5);
-    /// let stencil = lazy::map(lazy::constant(1_u32).take(2), op::NonZero);
+    /// let stencil = lazy::constant(1_u32).take(2);
     /// replace_where(&exec, 9_u32, stencil, writable.slice_mut(1..3)).unwrap();
     ///
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![1, 2, 9, 9, 5]);

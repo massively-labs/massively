@@ -1,7 +1,7 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MStorage, MVal, MVec, op::PredicateOp,
+    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVal, MVec, op::PredicateOp,
     op::UnaryOp,
 };
 
@@ -17,7 +17,7 @@ where
     R: Runtime,
     Item: CubeType + Send + Sync + 'static,
     Input: MIter<R, Item = Item>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
 {
     type Result = Result<crate::DeviceVec<R, u32>, Error>;
 
@@ -53,7 +53,7 @@ impl<R, Item, Stencil> crate::api::iter::OutputOperation<R, Item>
 where
     R: Runtime,
     Item: CubeType + Send + Sync + 'static,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
 {
     type Result = Result<(), Error>;
 
@@ -109,7 +109,7 @@ where
     Item: CubeType + Send + Sync + 'static,
     Input: MIter<R>,
     Op: UnaryOp<Input::Item, Output = Item>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
 {
     type Result = Result<(), Error>;
 
@@ -134,13 +134,12 @@ where
 ///
 /// ```
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, lazy, op, vector::copy_where};
+/// use massively::{Executor, vector::copy_where};
 ///
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let input = exec.to_device(&[10_u32, 20, 30, 40]);
 /// let stencil = exec.to_device(&[1_u32, 0, 1, 0]);
-/// let stencil = lazy::map(stencil.slice(..), op::NonZero);
-/// let output = copy_where(&exec, input.slice(..), stencil).unwrap();
+/// let output = copy_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
 ///
 /// assert_eq!(output.len(), 2);
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![10, 30]);
@@ -154,7 +153,7 @@ where
     R: Runtime,
     Input: MIter<R, Item = Item>,
     Item: MAlloc<R>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
 {
     let capacity = input.len()? as usize;
     let output = exec.alloc::<Item>(capacity);
@@ -173,7 +172,7 @@ pub(crate) fn copy_where_into<R, Input, Stencil, Output>(
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
     MVal::from_storage(
@@ -191,13 +190,12 @@ where
 ///
 /// ```
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, lazy, op, vector::remove_where};
+/// use massively::{Executor, vector::remove_where};
 ///
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let input = exec.to_device(&[10_u32, 20, 30, 40]);
 /// let stencil = exec.to_device(&[1_u32, 0, 1, 0]);
-/// let stencil = lazy::map(stencil.slice(..), op::NonZero);
-/// let output = remove_where(&exec, input.slice(..), stencil).unwrap();
+/// let output = remove_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
 ///
 /// assert_eq!(output.len(), 2);
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![20, 40]);
@@ -211,7 +209,7 @@ where
     R: Runtime,
     Input: MIter<R, Item = Item>,
     Item: MAlloc<R>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
 {
     let capacity = input.len()? as usize;
     let output = exec.alloc::<Item>(capacity);
@@ -230,7 +228,7 @@ pub(crate) fn remove_where_into<R, Input, Stencil, Output>(
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
     MVal::from_storage(
@@ -257,8 +255,8 @@ where
 ///
 /// #[cubecl::cube]
 /// impl op::PredicateOp<u32> for Even {
-///     fn apply(value: u32) -> bool {
-///         value % 2 == 0
+///     fn apply(value: u32) -> massively::MFlag {
+///         massively::flag::from_bool(value % 2 == 0)
 ///     }
 /// }
 ///
@@ -344,14 +342,13 @@ where
 ///
 /// ```
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, lazy, op, vector::replace_where};
+/// use massively::{Executor, vector::replace_where};
 ///
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let stencil = exec.to_device(&[0_u32, 1, 0, 1]);
 /// let output = exec.to_device(&[10_u32, 20, 30, 40]);
 ///
-/// let stencil = lazy::map(stencil.slice(..), op::NonZero);
-/// replace_where(&exec, 99_u32, stencil, output.slice_mut(..))
+/// replace_where(&exec, 99_u32, stencil.slice(..), output.slice_mut(..))
 /// .unwrap();
 ///
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![10, 99, 30, 99]);
@@ -364,7 +361,7 @@ pub fn replace_where<R, Stencil, Output>(
 ) -> Result<(), Error>
 where
     R: Runtime,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
     output.run_output_operation(ReplaceWhereOperation {
@@ -383,7 +380,7 @@ where
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, lazy, op, vector::transform_where};
+/// use massively::{Executor, op, vector::transform_where};
 ///
 /// struct AddOne;
 ///
@@ -400,13 +397,12 @@ where
 /// let input = exec.to_device(&[1_u32, 2, 3]);
 /// let stencil = exec.to_device(&[1_u32, 0, 1]);
 /// let output = exec.to_device(&[100_u32, 100, 100]);
-/// let stencil = lazy::map(stencil.slice(..), op::NonZero);
 ///
 /// transform_where(
 ///     &exec,
 ///     input.slice(..),
 ///     AddOne,
-///     stencil,
+///     stencil.slice(..),
 ///     output.slice_mut(..),
 /// )
 /// .unwrap();
@@ -423,7 +419,7 @@ pub fn transform_where<R, Input, Stencil, Output, Op>(
 where
     R: Runtime,
     Input: MIter<R>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
     Op: UnaryOp<Input::Item, Output = Output::Item>,
 {
@@ -445,9 +441,7 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[10_u32, 20, 30, 40, 50]);
         let flags = exec.to_device(&[1_u32, 0, 1, 0, 1]);
-        let stencil = crate::lazy::map(flags.slice(..), crate::op::NonZero);
-
-        let output = copy_where(&exec, input.slice(..), stencil).unwrap();
+        let output = copy_where(&exec, input.slice(..), flags.slice(..)).unwrap();
         let bytes = exec.client().read_one(output.handle.clone()).unwrap();
 
         assert_eq!(output.len(), 3);

@@ -7,7 +7,7 @@
 
 ----
 
-**Multi-platform GPU parallel and graph algorithms for Rust.**
+**Multi-platform GPU parallel algorithms for Rust.**
 
 </div>
 
@@ -17,15 +17,12 @@
 on top of [CubeCL](https://github.com/tracel-ai/cubecl). The same algorithm API
 can run on WGPU, CUDA, or HIP through the corresponding CubeCL runtime.
 
-The algorithms are organized into three complementary families:
+The algorithms are organized into two complementary families:
 
 - vector algorithms for map, scan, reduction, sorting, selection, and
   indexed movement
 - segment algorithms that apply map, scan, reduction, ordering, and selection
   independently to offset-delimited regions
-- graph algorithms expressed with Traversal Algebra through edge computation,
-  aggregation, state updates, frontier relaxation, and batched adjacency
-  operations
 
 Memory movement is explicit, outputs are preallocated, and user-defined
 operations are compiled into GPU kernels. Lazy maps, permutations, and
@@ -43,8 +40,8 @@ The public API is built around a few ideas:
 - parallel algorithms under `massively::vector`, such as `map`, `reduce`,
   `flat_map`, `inclusive_scan`, `sort`, `gather`, `copy_where`, and by-key
   variants
-- CSR graph traversal through source, destination, and edge expressions followed
-  by explicit emit, reduction, or state-update terminals
+- offset-delimited algorithms and the reusable `Segmentation` abstraction
+  under `massively::seg`
 
 ## Setup
 
@@ -92,125 +89,24 @@ fn main() -> Result<(), massively::Error> {
 }
 ```
 
-## Graph Algorithms
+## Composing Graph Algorithms
 
-`massively::graph` introduces **Traversal Algebra**, a compositional way to
-describe frontier-based graph algorithms. A program says which edges are
-active, which source, destination, or edge values to read, how to transform
-them, and how to emit or combine the results. It does not bake a particular
-GPU expansion or conflict-resolution strategy into the algorithm.
+Massively deliberately has no graph-specific execution layer. CSR rows are a
+`seg::Segmentation`; source IDs come from `segment_ids`, destination and edge
+data are lazy permutations, dense row aggregation uses
+`ForEachSegment<Reduce<...>>`, sparse frontier expansion uses `vector::flat_map`,
+and colliding proposals use the ordinary by-key and scatter-reduce algorithms.
 
-The basic flow is:
-
-```text
-frontier -> traverse -> pull values -> map -> push/reduce -> update -> next frontier
-```
-
-Traversal Algebra has a machine-checked mathematical foundation. For the
-precisely defined finite frontier/BSP fragment, Lean proves that the algebra
-and its reference BSP model can represent one another without changing program
-results. A second checked lowering carries typed BSP programs through Core TA
-to a denotational basis of the exported graph terminals and vector map
-and filtering operations. The proof also gives a separate Rust-shaped grammar
-for the six edge-expression leaves, one map, and the public terminal contracts.
-It proves operation contracts, not that arbitrary Rust/CubeCL code or hardware
-refines the Lean model. The implementation is checked separately against an
-independent sequential CPU oracle with generated property tests.
-
-The non-specialist summary, exact proof boundary, Lean development, and oracle
-are collected in the
-[Traversal Algebra artifact](verification/traversal-algebra/).
-
-The graph layer uses the same device storage, lazy expressions, multi-column
-values, and parallel primitives as the vector API. It is part of the main crate
-rather than a separate framework.
-
-Graph programs describe the meaning of an edge computation instead of choosing
-a low-level expansion strategy. A traversal selects outgoing CSR edges from a
-frontier, edge-context expressions select the data to read, and a terminal
-defines where results go.
-
-| Edge expression | Meaning |
-| --- | --- |
-| `source(values)` | Read a value at each edge's source vertex |
-| `destination(values)` | Read a value at each edge's destination vertex |
-| `edge(values)` | Read a value at the edge's CSR position |
-| `source_id()` / `destination_id()` / `edge_id()` | Read topology identities |
-
-Expressions compose with the ordinary `zip2` through `zip7` helpers. Terminals
-then give the edge stream an explicit interpretation:
-
-- `emit` writes one result per traversed edge.
-- `reduce_by_source` reduces each selected CSR row.
-- `reduce_by_destination` resolves colliding destination proposals.
-- `update_by_destination` combines proposals into existing vertex state.
-- `relax_min_by_destination` updates minimum state and produces the next
-  frontier from vertices that actually changed.
-- `intersect_count` performs batched intersections of sorted adjacency rows.
-
-For example, CSR sparse matrix-vector multiplication is the edge expression
-`edge(weight) * destination(vector)`, reduced by source row:
-
-```rust
-use cubecl::prelude::*;
-use massively::{Executor, op::ReductionOp, op::UnaryOp, graph, zip2};
-
-struct Multiply;
-
-#[cubecl::cube]
-impl UnaryOp<(f32, f32)> for Multiply {
-    type Output = f32;
-
-    fn apply(input: (f32, f32)) -> f32 {
-        input.0 * input.1
-    }
-}
-
-struct Sum;
-
-#[cubecl::cube]
-impl ReductionOp<f32> for Sum {
-    fn apply(lhs: f32, rhs: f32) -> f32 {
-        lhs + rhs
-    }
-}
-
-// destinations and offsets form a CSR topology; frontier contains its rows.
-graph::traverse(
-    &exec,
-    graph::Csr::new(destinations.slice(..), offsets.slice(..)),
-    frontier.slice(..),
-    destinations.len(),
-)?
-.map(
-    zip2(
-        graph::edge(weights.slice(..)),
-        graph::destination(vector.slice(..)),
-    ),
-    Multiply,
-)
-.reduce_by_source(&exec, 0.0, Sum)?;
-```
-
-Traversal planning and temporary expansion data are private. The current
-lowering composes GPU gather, map, segmented reduction, sorting, and
-scatter-reduce primitives. Because programs expose semantics rather than that
-lowering, future implementations can fuse edge expressions into terminals and
-choose atomic, sort-reduce, hierarchical, push/pull, or degree-aware
-intersection strategies without changing graph programs.
-
-The `graph-algorithms` crate implements all 12 applications that Gunrock's
-published table marks as supported by current Gunrock, plus all four priority
-future ports: connected components, Louvain modularity,
-random walk, and subgraph matching. It also includes personalized PageRank,
-Boolean SpGEMM, and Forman–Ricci curvature. See the
-[`Gunrock comparison table`](verification/traversal-algebra/graph-algorithms#gunrock-comparison)
-for the exact scope, tested compositions, independent CPU references, and
-generated graph property tests.
+The [`graph-algorithms`](verification/graph-algorithms/) verification crate
+builds 19 complete graph algorithms from those public vector, lazy, and segment
+primitives. Its generated property tests compare every implementation with an
+independent CPU reference. This is practical coverage evidence for the
+primitive set, while keeping topology policy and graph-specific data structures
+outside the reusable library API.
 
 ## Core Completeness Artifact
 
-The [Massively Core Lean artifact](verification/massively/) treats a conventional
+The [Massively Core Lean artifact](verification/proof/) treats a conventional
 finite-control priority-CRCW PRAM as an external expressiveness benchmark and
 Massively Core as a separate bulk-synchronous target machine. Lean checks the
 instruction-machine normalization, compilation to pull/map/proposal
@@ -254,10 +150,10 @@ transfers, and ownership checks remain visible at the call site.
 ### Scalar And Length Boundaries
 
 The public API returns scalar results as ordinary host-visible values:
-`reduce` returns its item, predicates return `bool`, and indices and lengths
-use `MIndex` (an alias of `u32`). Algorithms with data-dependent output
-lengths, such as `copy_where` and `reduce_by_key`, return storage whose exact
-length is already available through `len()`.
+`reduce` returns its item, truth-valued algorithms return `MFlag`, and indices
+and lengths use `MIndex`. Both aliases use `u32`. Algorithms with
+data-dependent output lengths, such as `copy_where` and `reduce_by_key`, return
+storage whose exact length is already available through `len()`.
 
 These calls are synchronous at the return boundary when a GPU-produced scalar
 or exact output length must be observed. Length-preserving algorithms and
@@ -267,9 +163,12 @@ GPU stages without intermediate CPU transfers, so a public operation performs
 at most the synchronization required by its return contract. `Executor::to_host`
 remains the explicit boundary for copying result data.
 
-CubeCL booleans are register values rather than storage elements. Device-resident
-boolean summaries therefore use `seg::BoolVec`: its backing flags are private,
-while its iterator item and `Executor::to_host` result are ordinary `bool` values.
+`MFlag` is the truth representation throughout Massively: zero is false and
+nonzero is true. Predicate producers should use `flag::from_bool` to return a
+canonical flag, while stencils accept any `MFlag` value. Consumers should use
+`flag::is_set`; comparing an arbitrary flag to `1` is incorrect because other
+nonzero values are also true. Device-resident summaries are ordinary
+`MVec<R, MFlag>` values.
 
 ### Device Storage And Slices
 
@@ -387,9 +286,12 @@ the algorithm and iterator layer.
 
 - `UnaryOp<Input>` maps one item to another.
 - `ExpandOp<Input>` expands one item into zero or more items.
-- `PredicateOp<Item>` tests one item.
-- `BinaryPredicateOp<Item>` compares two items.
+- `PredicateOp<Item>` tests one item and returns `MFlag`.
+- `BinaryPredicateOp<Item>` compares two items and returns `MFlag`.
 - `ReductionOp<Item>` combines two items.
+
+Use `flag::from_bool` to turn a CubeCL comparison into canonical 0/1, and
+`flag::is_set` when an `MFlag` must drive CubeCL control flow.
 
 ## Design Notes
 
@@ -403,10 +305,10 @@ single-column-only shortcuts and avoids arity explosion by separating control
 generation from payload movement where possible, especially in by-key
 algorithms.
 
-The same principle applies to graph traversal: the public model names topology,
-edge-context values, and terminal semantics, while frontier expansion and
-conflict resolution remain lowering decisions. This separation is what lets
-graph algorithms share improvements to Massively's underlying primitives.
+Graph algorithms follow the same principle without adding a graph-specific
+public layer: CSR partitioning, frontier expansion, conflict resolution, and
+state updates are direct compositions of `seg`, `lazy`, and `vector`
+primitives.
 
 ## Further Reading
 
@@ -418,15 +320,14 @@ under `massively/tests/vector` and `massively/tests/seg`.
 Their
 oracle tests compare public functions against CPU AoS references and cover the
 full map input/output arity matrix. Complete graph algorithm oracles live
-under `verification/traversal-algebra/graph-algorithms/tests` and compare every algorithm with
-independent CPU implementations on generated CSR graphs. Tests in `massively`
-itself cover the graph traversal primitives.
+under `verification/graph-algorithms/tests` and compare every algorithm with
+independent CPU implementations on generated CSR graphs.
 
 ### Graph Algorithms
 
-Complete algorithms written with Traversal Algebra, together with generated
-property tests and end-to-end benchmarks, live in the `graph-algorithms` crate
-inside the Traversal Algebra artifact.
+Complete algorithms composed from vector and segment primitives, together with
+generated property tests and end-to-end benchmarks, live in the
+`graph-algorithms` verification crate.
 
 ```sh
 cargo nextest run -p graph-algorithms --test oracle

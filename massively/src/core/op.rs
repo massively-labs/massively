@@ -4,27 +4,6 @@ use cubecl::prelude::*;
 
 use crate::MIndex;
 
-/// Encodes a device-register boolean for numeric scratch storage.
-#[cubecl::cube]
-pub(crate) fn bool_flag(value: bool) -> u32 {
-    if value { 1u32 } else { 0u32 }
-}
-
-/// Converts a `u32` flag into a semantic boolean.
-///
-/// Zero is `false`; every non-zero value is `true`.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NonZero;
-
-#[cubecl::cube]
-impl UnaryOp<u32> for NonZero {
-    type Output = bool;
-
-    fn apply(value: u32) -> bool {
-        value != 0u32
-    }
-}
-
 /// Compile-time unary operation used by [`crate::lazy::Map`].
 ///
 /// # Examples

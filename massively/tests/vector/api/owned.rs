@@ -1,8 +1,8 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MStorage, lazy,
-    op::{BinaryPredicateOp, NonZero, PredicateOp, ReductionOp, UnaryOp},
+    Executor, MFlag, MStorage,
+    op::{BinaryPredicateOp, PredicateOp, ReductionOp, UnaryOp},
     vector,
 };
 
@@ -40,27 +40,23 @@ impl ReductionOp<u32> for Add {
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for Less {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for Equal {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs == rhs
+    fn apply(lhs: u32, rhs: u32) -> MFlag {
+        massively::flag::from_bool(lhs == rhs)
     }
 }
 
 #[cubecl::cube]
 impl PredicateOp<u32> for Even {
-    fn apply(value: u32) -> bool {
-        value % 2 == 0
+    fn apply(value: u32) -> MFlag {
+        massively::flag::from_bool(value % 2 == 0)
     }
-}
-
-fn as_bool_stencil<Input>(input: Input) -> lazy::Map<Input, NonZero> {
-    lazy::map(input, NonZero)
 }
 
 #[test]
@@ -91,10 +87,8 @@ fn owned_vector_apis_return_device_storage() {
     assert_eq!(unique.len(), 3);
     assert_eq!(exec.to_host(&unique).unwrap(), vec![1, 2, 3]);
 
-    let copied =
-        vector::copy_where(&exec, input.slice(..), as_bool_stencil(stencil.slice(..))).unwrap();
-    let removed =
-        vector::remove_where(&exec, input.slice(..), as_bool_stencil(stencil.slice(..))).unwrap();
+    let copied = vector::copy_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
+    let removed = vector::remove_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
     let (partitioned, boundary) = vector::partition(&exec, input.slice(..), Even).unwrap();
     let filled = exec.alloc::<u32>(3);
     let fill_value = 7_u32;
@@ -130,8 +124,7 @@ fn u32_stencil_transform_treats_every_nonzero_value_as_true() {
     let input = exec.to_device(&[10_u32, 20, 30, 40]);
     let stencil = exec.to_device(&[0_u32, 7, u32::MAX, 0]);
 
-    let copied =
-        vector::copy_where(&exec, input.slice(..), as_bool_stencil(stencil.slice(..))).unwrap();
+    let copied = vector::copy_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
 
     assert_eq!(exec.to_host(&copied).unwrap(), vec![20, 30]);
 }
@@ -144,8 +137,7 @@ fn synchronized_logical_length_flows_through_an_algorithm_pipeline() {
 
     // copy_where resolves its device-produced length at the public boundary;
     // following fixed-length operations need no further length readback.
-    let compacted =
-        vector::copy_where(&exec, input.slice(..), as_bool_stencil(stencil.slice(..))).unwrap();
+    let compacted = vector::copy_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
     let sorted = vector::sort(&exec, compacted.slice(..), Less).unwrap();
     let unique = vector::unique(&exec, sorted.slice(..), Equal).unwrap();
     let incremented = vector::map(&exec, unique.slice(..), AddOne).unwrap();
@@ -164,8 +156,7 @@ fn synchronized_zero_length_remains_composable() {
     let input = exec.to_device(&[3_u32, 2, 1]);
     let stencil = exec.to_device(&[0_u32, 0, 0]);
 
-    let compacted =
-        vector::copy_where(&exec, input.slice(..), as_bool_stencil(stencil.slice(..))).unwrap();
+    let compacted = vector::copy_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
     let sorted = vector::sort(&exec, compacted.slice(..), Less).unwrap();
     let unique = vector::unique(&exec, sorted.slice(..), Equal).unwrap();
     let sum = vector::reduce(&exec, unique.slice(..), 7, Add).unwrap();

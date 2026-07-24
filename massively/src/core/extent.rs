@@ -91,14 +91,14 @@ fn min_extent_kernel(left: &[u32], right: &[u32], output: &mut [u32]) {
 #[cubecl::cube(launch_unchecked)]
 fn extent_equal_kernel(left: &[u32], right: &[u32], output: &mut [u32]) {
     if ABSOLUTE_POS == 0 {
-        output[0] = crate::op::bool_flag(left[0] == right[0]);
+        output[0] = crate::flag::from_bool(left[0] == right[0]);
     }
 }
 
 #[cubecl::cube(launch_unchecked)]
 fn extent_less_kernel(left: &[u32], right: &[u32], output: &mut [u32]) {
     if ABSOLUTE_POS == 0 {
-        output[0] = crate::op::bool_flag(left[0] < right[0]);
+        output[0] = crate::flag::from_bool(left[0] < right[0]);
     }
 }
 

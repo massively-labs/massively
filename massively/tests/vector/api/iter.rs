@@ -1,9 +1,9 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MAlloc, MIter, MIterMut, MStorage, MVec, lazy, op::Identity, op::NonZero,
-    op::UnaryOp, vector::gather, vector::map, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9,
-    zip10, zip11, zip12,
+    Executor, MAlloc, MFlag, MIter, MIterMut, MStorage, MVec, lazy, op::Identity, op::UnaryOp,
+    vector::gather, vector::map, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10, zip11,
+    zip12,
 };
 
 fn allocate_for_output<R, Output>(exec: &Executor<R>, output: &Output) -> MVec<R, Output::Item>
@@ -25,7 +25,7 @@ fn transform_where_into<R, Input, Stencil, Output, Op>(
 where
     R: Runtime,
     Input: MIter<R>,
-    Stencil: MIter<R, Item = bool>,
+    Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
     Op: UnaryOp<Input::Item, Output = Output::Item>,
 {
@@ -36,7 +36,7 @@ struct AddThree;
 struct IdentityTriple;
 struct SumFour;
 struct AddPair;
-struct EncodeBoolIndex;
+struct EncodeFlagIndex;
 
 #[test]
 fn custom_functions_can_request_owned_allocation() {
@@ -59,7 +59,7 @@ fn custom_preallocated_functions_do_not_need_allocation_bound() {
         &exec,
         input.slice(..),
         Identity,
-        lazy::map(lazy::constant(1_u32).take(3), NonZero),
+        lazy::constant(1_u32).take(3),
         output.slice_mut(..),
     )
     .unwrap();
@@ -104,22 +104,23 @@ impl UnaryOp<(u32, u32)> for AddPair {
 }
 
 #[cubecl::cube]
-impl UnaryOp<(bool, massively::MIndex)> for EncodeBoolIndex {
+impl UnaryOp<(MFlag, massively::MIndex)> for EncodeFlagIndex {
     type Output = u32;
 
-    fn apply(input: (bool, massively::MIndex)) -> u32 {
-        if input.0 { input.1 } else { 0u32 }
+    fn apply(input: (MFlag, massively::MIndex)) -> u32 {
+        if massively::flag::is_set(input.0) {
+            input.1
+        } else {
+            0u32
+        }
     }
 }
 
 #[test]
-fn zip_flattens_read_only_semantic_scalars() {
+fn zip_flattens_flag_scalars() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-    let input = zip2(
-        lazy::map(lazy::constant(1_u32).take(3), NonZero),
-        lazy::counting(4).take(3),
-    );
-    let output = map(&exec, input, EncodeBoolIndex).unwrap();
+    let input = zip2(lazy::constant(1_u32).take(3), lazy::counting(4).take(3));
+    let output = map(&exec, input, EncodeFlagIndex).unwrap();
 
     assert_eq!(exec.to_host(&output).unwrap(), vec![4, 5, 6]);
 }
@@ -340,7 +341,7 @@ fn mutable_slice_adapters_compose_and_can_be_read_back() {
     massively::vector::replace_where(
         &exec,
         (7_u32, 9_u32),
-        lazy::map(lazy::constant(1_u32).take(1), NonZero),
+        lazy::constant(1_u32).take(1),
         output.slice_mut(1..4).slice_mut(1..2),
     )
     .unwrap();

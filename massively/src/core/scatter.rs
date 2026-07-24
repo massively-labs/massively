@@ -121,7 +121,7 @@ mod tests {
             &exec,
             values.column(),
             encoded_indices.column(),
-            crate::read::Transform::new(encoded_stencil.column(), crate::op::NonZero),
+            encoded_stencil.column(),
             output.slice_mut(..),
         )
         .unwrap();

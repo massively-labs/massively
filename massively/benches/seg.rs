@@ -32,22 +32,22 @@ impl UnaryOp<u32> for AddOne {
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for Equal {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs == rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs == rhs)
     }
 }
 
 #[cubecl::cube]
 impl PredicateOp<u32> for Even {
-    fn apply(input: u32) -> bool {
-        input % 2u32 == 0u32
+    fn apply(input: u32) -> massively::MFlag {
+        massively::flag::from_bool(input % 2u32 == 0u32)
     }
 }
 
 #[cubecl::cube]
 impl BinaryPredicateOp<u32> for Less {
-    fn apply(lhs: u32, rhs: u32) -> bool {
-        lhs < rhs
+    fn apply(lhs: u32, rhs: u32) -> massively::MFlag {
+        massively::flag::from_bool(lhs < rhs)
     }
 }
 

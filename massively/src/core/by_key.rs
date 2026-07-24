@@ -223,8 +223,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<Three> for EqualThree {
-        fn apply(lhs: Three, rhs: Three) -> bool {
-            lhs.0 == rhs.0 && lhs.1 == rhs.1 && lhs.2 == rhs.2
+        fn apply(lhs: Three, rhs: Three) -> crate::MFlag {
+            crate::flag::from_bool(lhs.0 == rhs.0 && lhs.1 == rhs.1 && lhs.2 == rhs.2)
         }
     }
 
@@ -232,8 +232,8 @@ mod tests {
 
     #[cubecl::cube]
     impl BinaryPredicateOp<u32> for EqualU32 {
-        fn apply(lhs: u32, rhs: u32) -> bool {
-            lhs == rhs
+        fn apply(lhs: u32, rhs: u32) -> crate::MFlag {
+            crate::flag::from_bool(lhs == rhs)
         }
     }
 

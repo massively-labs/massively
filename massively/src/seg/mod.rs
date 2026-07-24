@@ -20,204 +20,9 @@ use cubecl::prelude::*;
 use std::{marker::PhantomData, ops::RangeBounds};
 
 use crate::{
-    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MStorage, MVal, MVec, op::BinaryPredicateOp,
-    op::ExpandOp, op::PredicateOp, op::ReductionOp, op::UnaryOp,
+    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVal, MVec,
+    op::BinaryPredicateOp, op::ExpandOp, op::PredicateOp, op::ReductionOp, op::UnaryOp,
 };
-
-/// Device-resident boolean results.
-///
-/// CubeCL does not expose `bool` as a storage element, so the backing column is
-/// encoded as `u32`. Reads from this type nevertheless have semantic item type
-/// `bool`, and [`Executor::to_host`] decodes the values to `Vec<bool>`.
-pub struct BoolVec<R: Runtime> {
-    flags: crate::DeviceVec<R, u32>,
-}
-
-impl<R: Runtime> Clone for BoolVec<R> {
-    fn clone(&self) -> Self {
-        Self {
-            flags: self.flags.clone(),
-        }
-    }
-}
-
-impl<R: Runtime> BoolVec<R> {
-    pub(crate) const fn from_flags(flags: crate::DeviceVec<R, u32>) -> Self {
-        Self { flags }
-    }
-
-    /// Returns the number of boolean values.
-    pub fn len(&self) -> MIndex {
-        self.flags.len()
-    }
-
-    /// Returns whether this vector contains no values.
-    pub fn is_empty(&self) -> bool {
-        self.flags.is_empty()
-    }
-
-    /// Returns a zero-copy logical subrange.
-    pub fn slice<Bounds>(&self, range: Bounds) -> BoolSlice
-    where
-        Bounds: RangeBounds<MIndex>,
-    {
-        BoolSlice {
-            flags: self.flags.slice(range),
-        }
-    }
-}
-
-/// Read-only zero-copy view of a [`BoolVec`].
-#[derive(Clone, Debug)]
-pub struct BoolSlice {
-    flags: crate::DeviceSlice<u32>,
-}
-
-impl BoolSlice {
-    /// Returns the number of boolean values.
-    pub fn len(&self) -> MIndex {
-        self.flags.len()
-    }
-
-    /// Returns whether this slice contains no values.
-    pub fn is_empty(&self) -> bool {
-        self.flags.is_empty()
-    }
-
-    /// Returns a nested zero-copy logical subrange.
-    pub fn slice<Bounds>(&self, range: Bounds) -> Self
-    where
-        Bounds: RangeBounds<MIndex>,
-    {
-        Self {
-            flags: self.flags.slice(range),
-        }
-    }
-}
-
-#[doc(hidden)]
-#[allow(private_interfaces)]
-impl<R> MIter<R> for BoolVec<R>
-where
-    R: Runtime,
-    crate::lazy::Map<crate::DeviceSlice<u32>, crate::op::NonZero>: MIter<R, Item = bool>,
-{
-    type Item = bool;
-    type Read = <crate::lazy::Map<crate::DeviceSlice<u32>, crate::op::NonZero> as MIter<R>>::Read;
-    type Slice = BoolSlice;
-
-    fn slice<Bounds>(&self, range: Bounds) -> Self::Slice
-    where
-        Bounds: RangeBounds<MIndex>,
-    {
-        BoolVec::slice(self, range)
-    }
-
-    fn capacity(&self) -> Result<MIndex, Error> {
-        crate::api::iter::logical_len(self.flags.capacity())
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        Ok(self.flags.logical_extent())
-    }
-
-    fn lower_read(self) -> Self::Read {
-        MIter::lower_read(crate::lazy::map(self.flags.column(), crate::op::NonZero))
-    }
-}
-
-#[doc(hidden)]
-#[allow(private_interfaces)]
-impl<R> MIter<R> for BoolSlice
-where
-    R: Runtime,
-    crate::lazy::Map<crate::DeviceSlice<u32>, crate::op::NonZero>: MIter<R, Item = bool>,
-{
-    type Item = bool;
-    type Read = <crate::lazy::Map<crate::DeviceSlice<u32>, crate::op::NonZero> as MIter<R>>::Read;
-    type Slice = BoolSlice;
-
-    fn slice<Bounds>(&self, range: Bounds) -> Self::Slice
-    where
-        Bounds: RangeBounds<MIndex>,
-    {
-        BoolSlice::slice(self, range)
-    }
-
-    fn capacity(&self) -> Result<MIndex, Error> {
-        crate::api::iter::logical_len(self.flags.capacity())
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        <crate::DeviceSlice<u32> as MIter<R>>::logical_extent(&self.flags)
-    }
-
-    fn lower_read(self) -> Self::Read {
-        MIter::lower_read(crate::lazy::map(self.flags, crate::op::NonZero))
-    }
-}
-
-#[doc(hidden)]
-#[allow(private_interfaces)]
-impl<R: Runtime> crate::core::runtime::DeviceRange for BoolVec<R> {
-    type Element = u32;
-    type HostElement = bool;
-
-    fn handle(&self) -> cubecl::server::Handle {
-        crate::core::runtime::DeviceRange::handle(&self.flags)
-    }
-
-    fn capacity(&self) -> usize {
-        crate::core::runtime::DeviceRange::capacity(&self.flags)
-    }
-
-    fn offset(&self) -> usize {
-        crate::core::runtime::DeviceRange::offset(&self.flags)
-    }
-
-    fn owner(&self) -> u64 {
-        crate::core::runtime::DeviceRange::owner(&self.flags)
-    }
-
-    fn extent(&self) -> crate::extent::LogicalExtent {
-        crate::core::runtime::DeviceRange::extent(&self.flags)
-    }
-
-    fn to_host_element(value: u32) -> bool {
-        value != 0
-    }
-}
-
-#[doc(hidden)]
-#[allow(private_interfaces)]
-impl crate::core::runtime::DeviceRange for BoolSlice {
-    type Element = u32;
-    type HostElement = bool;
-
-    fn handle(&self) -> cubecl::server::Handle {
-        crate::core::runtime::DeviceRange::handle(&self.flags)
-    }
-
-    fn capacity(&self) -> usize {
-        crate::core::runtime::DeviceRange::capacity(&self.flags)
-    }
-
-    fn offset(&self) -> usize {
-        crate::core::runtime::DeviceRange::offset(&self.flags)
-    }
-
-    fn owner(&self) -> u64 {
-        crate::core::runtime::DeviceRange::owner(&self.flags)
-    }
-
-    fn extent(&self) -> crate::extent::LogicalExtent {
-        crate::core::runtime::DeviceRange::extent(&self.flags)
-    }
-
-    fn to_host_element(value: u32) -> bool {
-        value != 0
-    }
-}
 
 /// A flat value stream and the offsets delimiting its segments.
 ///
@@ -626,7 +431,7 @@ where
             exec,
             values,
             crate::op::Identity,
-            crate::lazy::map(control.heads.slice(..), crate::op::NonZero),
+            control.heads.slice(..),
             output,
         )
     }
@@ -806,10 +611,10 @@ where
     Item: CubeType + 'static,
     Pred: PredicateOp<Item>,
 {
-    type Output = u32;
+    type Output = MFlag;
 
-    fn apply(input: Item) -> u32 {
-        crate::op::bool_flag(Pred::apply(input))
+    fn apply(input: Item) -> MFlag {
+        crate::flag::from_bool(crate::flag::is_set(Pred::apply(input)))
     }
 }
 
@@ -821,14 +626,10 @@ where
     Item: CubeType + 'static,
     Pred: PredicateOp<Item>,
 {
-    type Output = u32;
+    type Output = MFlag;
 
-    fn apply(input: Item) -> u32 {
-        if crate::predicate::predicate::<Item, Pred>(input) {
-            0u32
-        } else {
-            1u32
-        }
+    fn apply(input: Item) -> MFlag {
+        crate::flag::from_bool(!crate::predicate::predicate::<Item, Pred>(input))
     }
 }
 
@@ -846,11 +647,11 @@ impl UnaryOp<MIndex> for Decrement {
 struct InvertFlag;
 
 #[cubecl::cube]
-impl UnaryOp<u32> for InvertFlag {
-    type Output = u32;
+impl UnaryOp<MFlag> for InvertFlag {
+    type Output = MFlag;
 
-    fn apply(input: u32) -> u32 {
-        if input == 0u32 { 1u32 } else { 0u32 }
+    fn apply(input: MFlag) -> MFlag {
+        crate::flag::from_bool(!crate::flag::is_set(input))
     }
 }
 
@@ -917,10 +718,7 @@ where
     }
 
     let head_control = crate::selection::FlagInput::selected_control(
-        crate::api::iter::lower::<R, _>(crate::lazy::map(
-            control.heads.slice(..),
-            crate::op::NonZero,
-        )),
+        crate::api::iter::lower::<R, _>(control.heads.slice(..)),
         exec,
     )?;
 
@@ -1087,9 +885,9 @@ macro_rules! impl_predicate_summary {
 }
 
 impl_predicate_summary!(CountIf, PredicateMap, MIndex, control::SumU32, 0u32);
-impl_predicate_summary!(AllOf, PredicateMap, u32, control::MinU32, 1u32);
-impl_predicate_summary!(AnyOf, PredicateMap, u32, control::MaxU32, 0u32);
-impl_predicate_summary!(NoneOf, NegatedPredicateMap, u32, control::MinU32, 1u32);
+impl_predicate_summary!(AllOf, PredicateMap, MFlag, control::MinU32, 1u32);
+impl_predicate_summary!(AnyOf, PredicateMap, MFlag, control::MaxU32, 0u32);
+impl_predicate_summary!(NoneOf, NegatedPredicateMap, MFlag, control::MinU32, 1u32);
 
 impl<R, Input, InputOffsets, Output, Less> SummarizingExecutableInto<R, Input, InputOffsets, Output>
     for ForEachSegment<IsSorted<Less>>
@@ -1097,7 +895,7 @@ where
     R: Runtime,
     Input: MIter<R>,
     InputOffsets: MIter<R, Item = MIndex>,
-    Output: MIterMut<R, Item = u32>,
+    Output: MIterMut<R, Item = MFlag>,
     Less: BinaryPredicateOp<Input::Item>,
 {
     fn run_into(
@@ -1115,7 +913,7 @@ where
             crate::api::iter::lower_fixed::<R, _>(values),
         )?;
         control.clear_heads(exec, &breaks)?;
-        let ordered = exec.alloc::<u32>(value_len);
+        let ordered = exec.alloc::<MFlag>(value_len);
         crate::api::algorithm::transform::transform_into(
             exec,
             breaks.slice(..),
@@ -1292,7 +1090,7 @@ where
             exec,
             values,
             crate::op::Identity,
-            crate::Transform::new(control.heads.column(), crate::op::NonZero),
+            control.heads.column(),
             output.slice_mut(..),
         )?;
         Ok(SegmentIterator::new(output, offsets))
@@ -1392,43 +1190,9 @@ macro_rules! impl_owned_summary {
     };
 }
 
-macro_rules! impl_owned_bool_summary {
-    ($algorithm:ty, $( $bound:tt )+) => {
-        impl<R, Input, InputOffsets, Op> Executable<R, Input, InputOffsets>
-            for ForEachSegment<$algorithm>
-        where
-            R: Runtime,
-            Input: MIter<R>,
-            InputOffsets: MIter<R, Item = MIndex>,
-            $( $bound )+
-        {
-            type Output = BoolVec<R>;
-
-            fn run(
-                self,
-                exec: &Executor<R>,
-                input: SegmentIterator<Input, InputOffsets>,
-            ) -> Result<Self::Output, Error> {
-                let offset_len = input.offsets().capacity()? as usize;
-                let segment_count = offset_len
-                    .checked_sub(1)
-                    .ok_or(Error::LengthMismatch { left: 1, right: 0 })?;
-                let output = exec.alloc::<u32>(segment_count);
-                SummarizingExecutableInto::run_into(
-                    self,
-                    exec,
-                    input,
-                    output.slice_mut(..),
-                )?;
-                Ok(BoolVec::from_flags(output))
-            }
-        }
-    };
-}
-
 impl_owned_summary!(CountIf<Op>, MIndex, Op: PredicateOp<Input::Item>);
-impl_owned_bool_summary!(AllOf<Op>, Op: PredicateOp<Input::Item>);
-impl_owned_bool_summary!(AnyOf<Op>, Op: PredicateOp<Input::Item>);
-impl_owned_bool_summary!(NoneOf<Op>, Op: PredicateOp<Input::Item>);
-impl_owned_bool_summary!(IsSorted<Op>, Op: BinaryPredicateOp<Input::Item>);
+impl_owned_summary!(AllOf<Op>, MFlag, Op: PredicateOp<Input::Item>);
+impl_owned_summary!(AnyOf<Op>, MFlag, Op: PredicateOp<Input::Item>);
+impl_owned_summary!(NoneOf<Op>, MFlag, Op: PredicateOp<Input::Item>);
+impl_owned_summary!(IsSorted<Op>, MFlag, Op: BinaryPredicateOp<Input::Item>);
 impl_owned_summary!(IsSortedUntil<Op>, MIndex, Op: BinaryPredicateOp<Input::Item>);
