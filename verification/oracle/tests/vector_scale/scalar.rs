@@ -8,7 +8,16 @@ fn reduce() {
     let exec = exec();
     let device = exec.to_device(&input);
     assert_eq!(
-        massively::vector::reduce(&exec, lazify(device.slice(..)), 0, MaxU32,).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::reduce(
+                &exec,
+                lazify(device.slice(..)),
+                exec.value(0).unwrap(),
+                MaxU32,
+            )
+            .unwrap(),
+        ),
         reference::reduce(&input, 0, MaxU32),
     );
 }
@@ -19,7 +28,10 @@ fn count_if() {
     let exec = exec();
     let device = exec.to_device(&input);
     assert_eq!(
-        massively::vector::count_if(&exec, lazify(device.slice(..)), NonZero).unwrap() as usize,
+        read_value(
+            &exec,
+            massively::vector::count_if(&exec, lazify(device.slice(..)), NonZero).unwrap(),
+        ) as usize,
         reference::count_if(&input, NonZero),
     );
 }

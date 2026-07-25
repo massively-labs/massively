@@ -59,12 +59,17 @@ fn bench_map_reduce(c: &mut Criterion) {
     let mut column_group = c.benchmark_group("map_reduce");
     for &len in SIZES {
         let values = exec.to_device(&dense_f32(len));
-        let init = 0.0_f32;
+        let init = exec.value(0.0_f32).unwrap();
         exec.sync().unwrap();
         column_group.bench_function(BenchmarkId::new("gpu", len), |b| {
             b.iter(|| {
                 let input = lazy::map(values.slice(..), MulTwo);
-                black_box(reduce(&exec, input, init.clone(), Sum).unwrap())
+                black_box(
+                    reduce(&exec, input, init.clone(), Sum)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
+                )
             })
         });
     }
@@ -74,7 +79,7 @@ fn bench_map_reduce(c: &mut Criterion) {
     for &len in SIZES {
         let left = exec.to_device(&dense_f32(len));
         let right = exec.to_device(&dense_f32(len));
-        let init = 0.0_f32;
+        let init = exec.value(0.0_f32).unwrap();
         exec.sync().unwrap();
         zip2_group.bench_function(BenchmarkId::new("gpu", len), |b| {
             b.iter(|| {
@@ -82,7 +87,12 @@ fn bench_map_reduce(c: &mut Criterion) {
                     zip2(black_box(left.slice(..)), black_box(right.slice(..))),
                     AddPair,
                 );
-                black_box(reduce(&exec, input, init.clone(), Sum).unwrap())
+                black_box(
+                    reduce(&exec, input, init.clone(), Sum)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
+                )
             })
         });
     }
@@ -93,7 +103,7 @@ fn bench_map_reduce(c: &mut Criterion) {
         let first = exec.to_device(&dense_f32(len));
         let second = exec.to_device(&dense_f32(len));
         let third = exec.to_device(&dense_f32(len));
-        let init = 0.0_f32;
+        let init = exec.value(0.0_f32).unwrap();
         exec.sync().unwrap();
         zip3_group.bench_function(BenchmarkId::new("gpu", len), |b| {
             b.iter(|| {
@@ -105,7 +115,12 @@ fn bench_map_reduce(c: &mut Criterion) {
                     ),
                     AddTriple,
                 );
-                black_box(reduce(&exec, input, init.clone(), Sum).unwrap())
+                black_box(
+                    reduce(&exec, input, init.clone(), Sum)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
+                )
             })
         });
     }

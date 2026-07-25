@@ -94,8 +94,8 @@ pub fn solve_with_choices<R: Runtime>(
             .expect("R-MAT random choice count exceeds u32")
     );
     let vertex_count = 1u32 << scale;
-    let mut sources = common::filled(exec, edge_count as usize, 0u32)?;
-    let mut destinations = common::filled(exec, edge_count as usize, 0u32)?;
+    let mut sources = common::filled(exec, edge_count, 0u32)?;
+    let mut destinations = common::filled(exec, edge_count, 0u32)?;
 
     for level in 0..scale {
         let begin = level * edge_count;
@@ -163,7 +163,7 @@ pub fn solve_with_choices<R: Runtime>(
         (sources, destinations) = MStorage::into_columns(pairs);
     }
 
-    let weights = common::filled(exec, sources.len() as usize, 1u32)?;
+    let weights = common::filled(exec, sources.len(), 1u32)?;
     let weighted = common::weighted_csr_from_edges(
         exec,
         vertex_count,

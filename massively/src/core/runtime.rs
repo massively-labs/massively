@@ -13,6 +13,13 @@ pub use crate::read::DeviceSlice;
 
 static NEXT_EXECUTOR_ID: AtomicU64 = AtomicU64::new(1);
 
+fn assert_indexable_len(len: usize) {
+    assert!(
+        crate::MIndex::try_from(len).is_ok(),
+        "device vector length does not fit in MIndex"
+    );
+}
+
 /// Execution context for one CubeCL runtime.
 #[derive(Clone)]
 pub struct Executor<R: Runtime> {
@@ -76,6 +83,7 @@ impl<R: Runtime> Executor<R> {
     where
         T: MStorageElement,
     {
+        assert_indexable_len(input.len());
         let handle = if input.is_empty() {
             self.client.empty(size_of::<T>().max(1))
         } else {
@@ -95,6 +103,7 @@ impl<R: Runtime> Executor<R> {
     where
         T: MStorageElement,
     {
+        assert_indexable_len(len);
         DeviceVec {
             handle: self.client.empty(len.max(1) * size_of::<T>()),
             len,
@@ -112,6 +121,7 @@ impl<R: Runtime> Executor<R> {
     where
         T: MStorageElement,
     {
+        assert_indexable_len(len);
         DeviceVec {
             handle,
             len,
@@ -179,7 +189,8 @@ impl<R: Runtime> Executor<R> {
     ///
     /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     /// let output = exec.alloc::<u32>(4);
-    /// fill(&exec, 7_u32, output.slice_mut(..)).unwrap();
+    /// let value = exec.value(7_u32).unwrap();
+    /// fill(&exec, value, output.slice_mut(..)).unwrap();
     /// exec.sync().unwrap();
     /// ```
     pub fn sync(&self) -> Result<(), Error> {
@@ -288,7 +299,8 @@ impl<R: Runtime, T> DeviceVec<R, T> {
     /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     /// let values = exec.to_device(&[1_u32, 2, 3, 4]);
     /// let stencil = lazy::constant(1_u32).take(2);
-    /// replace_where(&exec, 9_u32, stencil, values.slice_mut(1..3)).unwrap();
+    /// let replacement = exec.value(9_u32).unwrap();
+    /// replace_where(&exec, replacement, stencil, values.slice_mut(1..3)).unwrap();
     ///
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![1, 9, 9, 4]);
     /// ```
@@ -452,7 +464,8 @@ impl<T> DeviceSliceMut<T> {
     /// let values = exec.to_device(&[1_u32, 2, 3, 4, 5]);
     /// let writable = values.slice_mut(1..5);
     /// let stencil = lazy::constant(1_u32).take(2);
-    /// replace_where(&exec, 9_u32, stencil, writable.slice_mut(1..3)).unwrap();
+    /// let replacement = exec.value(9_u32).unwrap();
+    /// replace_where(&exec, replacement, stencil, writable.slice_mut(1..3)).unwrap();
     ///
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![1, 2, 9, 9, 5]);
     /// ```
@@ -501,5 +514,20 @@ impl<T: MStorageElement> DeviceRange for DeviceSliceMut<T> {
     }
     fn to_host_element(value: T) -> T {
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn maximum_mindex_length_is_indexable() {
+        super::assert_indexable_len(crate::MIndex::MAX as usize);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "device vector length does not fit in MIndex")]
+    fn length_above_mindex_is_rejected_before_allocation() {
+        super::assert_indexable_len(crate::MIndex::MAX as usize + 1);
     }
 }

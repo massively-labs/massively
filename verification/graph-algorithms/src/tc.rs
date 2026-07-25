@@ -62,7 +62,7 @@ pub fn solve<R: Runtime>(exec: &Executor<R>, graph: &DeviceCsr<R>) -> common::Re
         ),
         IntersectCount,
     )?;
-    Ok(vector::reduce(exec, counts.slice(..), 0, SumU32)? / 6)
+    Ok(vector::reduce(exec, counts.slice(..), exec.value(0)?, SumU32)?.read(exec)? / 6)
 }
 
 #[cfg(test)]

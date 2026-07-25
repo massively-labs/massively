@@ -41,7 +41,13 @@ fn normalize<R: Runtime>(
     values: DeviceVec<R, f32>,
 ) -> common::Result<DeviceVec<R, f32>> {
     let len = values.len();
-    let norm_squared = vector::reduce(exec, lazy::map(values.slice(..), Square), 0.0, SumF32)?;
+    let norm_squared = vector::reduce(
+        exec,
+        lazy::map(values.slice(..), Square),
+        exec.value(0.0)?,
+        SumF32,
+    )?
+    .read(exec)?;
     let scale = if norm_squared == 0.0 {
         1.0
     } else {
@@ -61,18 +67,19 @@ pub fn solve<R: Runtime>(
 ) -> common::Result<(DeviceVec<R, f32>, DeviceVec<R, f32>)> {
     let n = graph.vertex_count();
     assert!(n != 0);
-    let mut hubs = common::filled(exec, n as usize, 1.0f32)?;
-    let mut authorities = common::filled(exec, n as usize, 1.0f32)?;
+    let mut hubs = common::filled(exec, n, 1.0f32)?;
+    let mut authorities = common::filled(exec, n, 1.0f32)?;
     let zero = 0.0f32;
+    let zero_value = exec.value(zero)?;
     let sources = graph.segmentation().segment_ids(exec)?;
 
     for _ in 0..iterations {
-        authorities = common::filled(exec, n as usize, zero)?;
+        authorities = common::filled(exec, n, zero)?;
         vector::scatter_reduce(
             exec,
             lazy::permute(hubs.slice(..), sources.slice(..)),
             graph.destinations().slice(..),
-            zero,
+            zero_value.clone(),
             SumF32,
             authorities.slice_mut(..),
         )?;
@@ -82,7 +89,7 @@ pub fn solve<R: Runtime>(
             exec,
             graph,
             lazy::permute(authorities.slice(..), graph.destinations().slice(..)),
-            zero,
+            zero_value.clone(),
             SumF32,
         )?;
         hubs = normalize(exec, hubs)?;

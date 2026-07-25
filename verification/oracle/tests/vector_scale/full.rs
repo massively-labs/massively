@@ -16,7 +16,16 @@ fn scale_prime_block_dispatch_guard() {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::reduce(&exec, lazify(gpu.slice(..)), 0, MaxU32,).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::reduce(
+                &exec,
+                lazify(gpu.slice(..)),
+                exec.value(0).unwrap(),
+                MaxU32,
+            )
+            .unwrap(),
+        ),
         (LEN - 1) as u32
     );
     assert_eq!(
@@ -78,7 +87,16 @@ scale_test!(scale_reduce, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::reduce(&exec, lazify(gpu.slice(..)), 0, MaxU32,).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::reduce(
+                &exec,
+                lazify(gpu.slice(..)),
+                exec.value(0).unwrap(),
+                MaxU32,
+            )
+            .unwrap(),
+        ),
         reference::reduce(&input, 0, MaxU32)
     );
 });
@@ -98,8 +116,13 @@ scale_test!(scale_exclusive_scan, {
     let input = scale_input();
     let exec = exec();
     let gpu = exec.to_device(&input);
-    let output =
-        massively::vector::exclusive_scan(&exec, lazify(gpu.slice(..)), 0, MaxU32).unwrap();
+    let output = massively::vector::exclusive_scan(
+        &exec,
+        lazify(gpu.slice(..)),
+        exec.value(0).unwrap(),
+        MaxU32,
+    )
+    .unwrap();
     assert_eq!(
         exec.to_host(&output).unwrap(),
         reference::exclusive_scan(&input, 0, MaxU32)
@@ -164,7 +187,7 @@ scale_test!(scale_partition, {
     let gpu = exec.to_device(&input);
     let (output, boundary) =
         massively::vector::partition(&exec, lazify(gpu.slice(..)), NonZero).unwrap();
-    let boundary = boundary as usize;
+    let boundary = read_value(&exec, boundary) as usize;
     let (mut selected, rejected) = reference::partition(&input, NonZero);
     assert_eq!(boundary, selected.len());
     selected.extend(rejected);
@@ -176,7 +199,10 @@ scale_test!(scale_count_if, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::count_if(&exec, lazify(gpu.slice(..)), NonZero).unwrap() as usize,
+        read_value(
+            &exec,
+            massively::vector::count_if(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ) as usize,
         reference::count_if(&input, NonZero)
     );
 });
@@ -185,7 +211,10 @@ scale_test!(scale_all_of, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::all_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::all_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::all_of(&input, NonZero))
     );
 });
@@ -194,7 +223,10 @@ scale_test!(scale_any_of, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::any_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::any_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::any_of(&input, NonZero))
     );
 });
@@ -203,7 +235,10 @@ scale_test!(scale_none_of, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::none_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::none_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::none_of(&input, NonZero))
     );
 });
@@ -224,7 +259,10 @@ scale_test!(scale_is_partitioned, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::is_partitioned(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::is_partitioned(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::is_partitioned(&input, NonZero))
     );
 });
@@ -311,13 +349,16 @@ scale_test!(scale_equal, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::equal(
+        read_value(
             &exec,
-            lazify(gpu.slice(..)),
-            lazify(gpu.slice(..)),
-            EqualU32
-        )
-        .unwrap(),
+            massively::vector::equal(
+                &exec,
+                lazify(gpu.slice(..)),
+                lazify(gpu.slice(..)),
+                EqualU32
+            )
+            .unwrap(),
+        ),
         expected_flag(reference::equal(&input, &input, EqualU32))
     );
 });
@@ -377,7 +418,7 @@ scale_test!(scale_fill, {
     let mut expected = input.clone();
     let output = exec.alloc::<u32>(input.len().try_into().unwrap());
     let value = 123_u32;
-    massively::vector::fill(&exec, value, output.slice_mut(..)).unwrap();
+    massively::vector::fill(&exec, exec.value(value).unwrap(), output.slice_mut(..)).unwrap();
     reference::fill(123, &mut expected);
     assert_eq!(exec.to_host(&output).unwrap(), expected);
 });
@@ -391,7 +432,7 @@ scale_test!(scale_replace_where, {
     let value = 123_u32;
     massively::vector::replace_where(
         &exec,
-        value,
+        exec.value(value).unwrap(),
         as_stencil(lazify(flags_gpu.slice(..))),
         output.slice_mut(..),
     )
@@ -440,7 +481,10 @@ scale_test!(scale_is_sorted, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::is_sorted(&exec, lazify(gpu.slice(..)), LessU32).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::is_sorted(&exec, lazify(gpu.slice(..)), LessU32).unwrap(),
+        ),
         expected_flag(reference::is_sorted(&input, LessU32))
     );
 });
@@ -449,7 +493,10 @@ scale_test!(scale_is_sorted_until, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::is_sorted_until(&exec, lazify(gpu.slice(..)), LessU32).unwrap() as usize,
+        read_value(
+            &exec,
+            massively::vector::is_sorted_until(&exec, lazify(gpu.slice(..)), LessU32).unwrap(),
+        ) as usize,
         reference::is_sorted_until(&input, LessU32)
     );
 });
@@ -460,13 +507,16 @@ scale_test!(scale_lexicographical_compare, {
     let left_gpu = exec.to_device(&left);
     let right_gpu = exec.to_device(&right);
     assert_eq!(
-        massively::vector::lexicographical_compare(
+        read_value(
             &exec,
-            lazify(left_gpu.slice(..)),
-            lazify(right_gpu.slice(..)),
-            LessU32
-        )
-        .unwrap(),
+            massively::vector::lexicographical_compare(
+                &exec,
+                lazify(left_gpu.slice(..)),
+                lazify(right_gpu.slice(..)),
+                LessU32
+            )
+            .unwrap(),
+        ),
         expected_flag(reference::lexicographical_compare(&left, &right, LessU32))
     );
 });
@@ -629,7 +679,7 @@ scale_test!(scale_exclusive_scan_by_key, {
         lazify(keys_gpu.slice(..)),
         lazify(values_gpu.slice(..)),
         EqualU32,
-        0,
+        exec.value(0).unwrap(),
         MaxU32,
     )
     .unwrap();
@@ -651,7 +701,7 @@ scale_test!(scale_reduce_by_key, {
             lazify(keys_gpu.slice(..)),
             lazify(values_gpu.slice(..)),
             EqualU32,
-            0,
+            exec.value(0).unwrap(),
             MaxU32,
         )
         .unwrap(),

@@ -151,7 +151,14 @@ pub fn solve<R: Runtime>(
     );
     let n = graph.vertex_count();
     let sources = graph.segmentation().segment_ids(exec)?;
-    let mut distances = common::filled(exec, graph.edge_count(), 0.0f32)?;
+    let mut distances = common::filled(
+        exec,
+        graph
+            .edge_count()
+            .try_into()
+            .expect("edge count exceeds MIndex"),
+        0.0f32,
+    )?;
 
     for feature in 0..feature_count {
         let edge_count = distances.len();

@@ -49,7 +49,7 @@ pub fn solve<R: Runtime>(
     exec: &Executor<R>,
     graph: &DeviceCsr<R>,
 ) -> common::Result<DeviceVec<R, u32>> {
-    let n = graph.vertex_count() as usize;
+    let n = graph.vertex_count();
     let current_degree = common::resident_degrees(exec, graph)?;
     let removed = common::filled(exec, n, 0u32)?;
     let core = common::filled(exec, n, 0u32)?;
@@ -61,6 +61,7 @@ pub fn solve<R: Runtime>(
             zip2(current_degree.slice(..), removed.slice(..)),
             CandidateLess,
         )?
+        .read(exec)?
         .expect("the active vertex set is nonempty");
         let degree = read_u32(exec, &current_degree, vertex)?;
         running_core = running_core.max(degree);

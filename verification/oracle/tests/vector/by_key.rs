@@ -49,7 +49,7 @@ by_key_case!(
             lazify(key_gpu.slice(..)),
             lazify(value_gpu.slice(..)),
             Equal,
-            7,
+            exec.value(7).unwrap(),
             Sum,
         )
         .unwrap();
@@ -68,7 +68,7 @@ by_key_case!(reduce_by_key, |exec, keys, values, key_gpu, value_gpu| {
             lazify(key_gpu.slice(..)),
             lazify(value_gpu.slice(..)),
             Equal,
-            7,
+            exec.value(7).unwrap(),
             Sum,
         )
         .unwrap(),

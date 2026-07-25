@@ -31,7 +31,7 @@ pub fn solve<R: Runtime>(
     sources: DeviceSlice<u32>,
 ) -> common::Result<DeviceVec<R, u32>> {
     let n = graph.graph().vertex_count();
-    let distance = common::filled(exec, n as usize, INF)?;
+    let distance = common::filled(exec, n, INF)?;
     if sources.len() == 0 {
         return Ok(distance);
     }

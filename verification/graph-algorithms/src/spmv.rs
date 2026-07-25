@@ -38,7 +38,7 @@ pub fn solve<R: Runtime>(
         ),
         MulF32,
     );
-    common::reduce_rows(exec, matrix.graph(), products, 0.0, SumF32)
+    common::reduce_rows(exec, matrix.graph(), products, exec.value(0.0)?, SumF32)
 }
 
 #[cfg(test)]

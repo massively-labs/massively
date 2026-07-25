@@ -35,7 +35,10 @@ fn reduce_estimates_pi_from_lazy_random_map() {
         .take(samples as massively::MIndex);
     let hits = lazy::map(zip2(x, y), DetectHit);
 
-    let count = reduce(&exec, hits, 0_u32, CountHit).unwrap();
+    let count = reduce(&exec, hits, exec.value(0_u32).unwrap(), CountHit)
+        .unwrap()
+        .read(&exec)
+        .unwrap();
     let pi = (count as f64 / samples as f64) * 4.0;
 
     assert!((3.0..3.3).contains(&pi), "pi={pi}, count={count}");
@@ -54,7 +57,10 @@ fn reduce_estimates_pi_from_lazy_random_map_4g() {
         .take(samples as massively::MIndex);
     let hits = lazy::map(zip2(x, y), DetectHit);
 
-    let count = reduce(&exec, hits, 0_u32, CountHit).unwrap();
+    let count = reduce(&exec, hits, exec.value(0_u32).unwrap(), CountHit)
+        .unwrap()
+        .read(&exec)
+        .unwrap();
     let pi = (count as f64 / samples as f64) * 4.0;
 
     assert!((3.10..3.18).contains(&pi), "pi={pi}, count={count}");
@@ -69,10 +75,24 @@ fn reduce_counts_four_billion_lazy_constants() {
     let count = reduce(
         &exec,
         lazy::constant(1_u32).take(len as massively::MIndex),
-        0_u32,
+        exec.value(0_u32).unwrap(),
         CountHit,
     )
+    .unwrap()
+    .read(&exec)
     .unwrap();
 
     assert_eq!(count, len as u32);
+}
+
+#[test]
+fn reduce_result_can_feed_the_next_reduce_without_a_host_read() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let first = exec.to_device(&[1_u32, 2, 3]);
+    let second = exec.to_device(&[4_u32, 5]);
+
+    let subtotal = reduce(&exec, first.slice(..), exec.value(0_u32).unwrap(), CountHit).unwrap();
+    let total = reduce(&exec, second.slice(..), subtotal, CountHit).unwrap();
+
+    assert_eq!(total.read(&exec).unwrap(), 15);
 }

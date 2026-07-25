@@ -56,8 +56,9 @@ const TILE_SIZE: usize = BLOCK_SIZE as usize * ITEMS_PER_UNIT;
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let input = exec.to_device(&[1_u32, 2, 3]);
 ///
-/// let sum = reduce(&exec, input.slice(..), 0_u32, Add).unwrap();
-/// assert_eq!(sum, 6);
+/// let init = exec.value(0_u32).unwrap();
+/// let sum = reduce(&exec, input.slice(..), init, Add).unwrap();
+/// assert_eq!(sum.read(&exec).unwrap(), 6);
 /// ```
 #[cubecl::cube]
 pub trait ReductionOp<Item: CubeType>: 'static + Send + Sync {
@@ -1270,7 +1271,7 @@ mod tests {
             AddSeven,
         )
         .unwrap();
-        let output = crate::MVal::<WgpuRuntime, Seven>::from_storage(output)
+        let output = crate::Scalar::<WgpuRuntime, Seven>::from_storage(output)
             .unwrap()
             .read(&exec)
             .unwrap();

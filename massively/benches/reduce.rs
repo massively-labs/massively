@@ -25,10 +25,17 @@ fn bench_reduce(c: &mut Criterion) {
     for &len in common::SIZES {
         let values = exec.to_device(&common::dense_f32(len));
         let keys = exec.to_device(&common::run_keys(len, 8));
-        let init = 0.0_f32;
+        let init = exec.value(0.0_f32).unwrap();
         exec.sync().unwrap();
         group.bench_function(BenchmarkId::new("reduce", len), |b| {
-            b.iter(|| black_box(reduce(&exec, values.slice(..), init.clone(), Sum).unwrap()))
+            b.iter(|| {
+                black_box(
+                    reduce(&exec, values.slice(..), init.clone(), Sum)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
+                )
+            })
         });
         group.bench_function(BenchmarkId::new("reduce_by_key", len), |b| {
             b.iter(|| {

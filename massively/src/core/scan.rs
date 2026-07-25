@@ -1180,14 +1180,15 @@ where
 pub(crate) fn exclusive_scan<R, Input, Output, Item, Op>(
     exec: &Executor<R>,
     input: Input,
-    init: Item,
+    init: FixedScanStorage<R, Item>,
     op: Op,
     output: Output,
 ) -> Result<(), Error>
 where
     R: Runtime,
     Input: ReadExpression<Item = Item> + LowerReadExpression + StageRead<R, Env0>,
-    Item: CubeType + Send + Sync + 'static,
+    Item: crate::allocation::ScratchStorage<R>,
+    FixedScanRead<R, Item>: crate::indexed::GatherInput<R, crate::Constant<u32>, Output>,
     Op: ReductionOp<Item>,
     Output: OutputExpression<Item = Item>
         + LowerOutputExpression
@@ -1214,7 +1215,12 @@ where
         });
     }
     if len > 0 {
-        output.slice_output(..1).fill_output(exec, init)?;
+        crate::indexed::GatherInput::gather(
+            crate::read::FixedRead::new(init.read()),
+            exec,
+            crate::Constant::new(0, 1),
+            output.slice_output(..1),
+        )?;
     }
     <Dispatch<A13, S12> as InclusiveScanDispatch<
         R,
@@ -1463,7 +1469,15 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[1_u32, 2, 3, 4]);
         let output = exec.to_device(&[99_u32; 6]);
-        exclusive_scan(&exec, input.column(), 10, Sum, output.slice_mut(1..5)).unwrap();
+        let init = exec.value(10_u32).unwrap();
+        exclusive_scan(
+            &exec,
+            input.column(),
+            init.into_scratch_storage(),
+            Sum,
+            output.slice_mut(1..5),
+        )
+        .unwrap();
         assert_eq!(exec.to_host(&output).unwrap(), vec![99, 10, 11, 13, 16, 99]);
     }
 
@@ -1473,17 +1487,26 @@ mod tests {
         let len = 70_001usize;
         let input = exec.to_device(&vec![1_u32; len]);
         let output = exec.to_device(&vec![0_u32; len]);
-        exclusive_scan(&exec, input.column(), 10, Sum, output.slice_mut(..)).unwrap();
+        let init = exec.value(10_u32).unwrap();
+        exclusive_scan(
+            &exec,
+            input.column(),
+            init.into_scratch_storage(),
+            Sum,
+            output.slice_mut(..),
+        )
+        .unwrap();
         let actual = exec.to_host(&output).unwrap();
         for &index in &[0, 255, 256, 65_535, 70_000] {
             assert_eq!(actual[index], 10 + index as u32);
         }
 
         let ordered = exec.to_device(&vec![0_u32; 600]);
+        let init = exec.value(42_u32).unwrap();
         exclusive_scan(
             &exec,
             input.slice(..600),
-            42,
+            init.into_scratch_storage(),
             TakeLeft,
             ordered.slice_mut(..),
         )
@@ -1525,7 +1548,15 @@ mod tests {
         let input = Permute::new(seven, Counting::new(0, 4));
         let output = exec.alloc_row::<Seven>(4);
         let init: Seven = (10, 20, 30, 40, 50, 60, 70);
-        exclusive_scan(&exec, input, init, SumSevenItems, output.write()).unwrap();
+        let init = exec.value(init).unwrap();
+        exclusive_scan(
+            &exec,
+            input,
+            init.into_scratch_storage(),
+            SumSevenItems,
+            output.write(),
+        )
+        .unwrap();
 
         let (first, _, _, _, _, _, last) = crate::MStorage::into_columns(output);
         assert_eq!(exec.to_host(&first).unwrap(), vec![10, 11, 12, 13]);

@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 
 use crate::{
-    Error, Executor, MAlloc, MFlag, MIter, MIterMut, MVal, RowStorage,
+    Error, Executor, MAlloc, MFlag, MIter, MIterMut, MVal, RowStorage, Scalar,
     op::{BinaryPredicateOp, ReductionOp},
 };
 
@@ -124,7 +124,7 @@ struct ScatterReduceOperation<'a, R: Runtime, Values, Indices, Item: MAlloc<R>, 
     exec: &'a Executor<R>,
     values: Values,
     indices: Indices,
-    init: MVal<R, Item>,
+    init: Scalar<R, Item>,
     op: Op,
 }
 
@@ -378,7 +378,7 @@ pub fn scatter_reduce<R, Values, Indices, Item, Output, Op>(
     exec: &Executor<R>,
     values: Values,
     indices: Indices,
-    init: Item,
+    init: impl MVal<R, Item>,
     op: Op,
     output: Output,
 ) -> Result<(), Error>
@@ -390,7 +390,7 @@ where
     Output: MIterMut<R, Item = Item>,
     Op: ReductionOp<Item>,
 {
-    let init = exec.value(init)?;
+    let init = init.into_device(exec)?;
     scatter_reduce_value(exec, values, indices, init, op, output)
 }
 
@@ -398,7 +398,7 @@ pub(crate) fn scatter_reduce_value<R, Values, Indices, Item, Output, Op>(
     exec: &Executor<R>,
     values: Values,
     indices: Indices,
-    init: MVal<R, Item>,
+    init: Scalar<R, Item>,
     op: Op,
     output: Output,
 ) -> Result<(), Error>
@@ -455,7 +455,7 @@ mod tests {
             &exec,
             zip2(left.slice(..), right.slice(..)),
             indices.slice(..),
-            (0, 0),
+            exec.value((0, 0)).unwrap(),
             PairAdd,
             zip2(output_left.slice_mut(..), output_right.slice_mut(..)),
         )
@@ -479,7 +479,7 @@ mod tests {
             &exec,
             zip3(first.slice(..), second.slice(..), third.slice(..)),
             indices.slice(..),
-            (0, 0, 0),
+            exec.value((0, 0, 0)).unwrap(),
             TripleAdd,
             zip3(
                 output_first.slice_mut(..),

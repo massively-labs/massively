@@ -264,7 +264,7 @@ fn bench_reduce(c: &mut Criterion) {
             let segment_count = host_offsets.len() - 1;
             let segment_offsets = exec.to_device(&host_offsets);
             let keys = exec.to_device(&common::run_keys(len, segment_len));
-            let init = 0u32;
+            let init = exec.value(0u32).unwrap();
             let _segment_count = segment_count;
             exec.sync().unwrap();
 
@@ -496,6 +496,7 @@ fn bench_control_geometries(c: &mut Criterion) {
 
     for (geometry, host_offsets) in control_geometries(LEN) {
         let segment_offsets = exec.to_device(&host_offsets);
+        let init = exec.value(0u32).unwrap();
         exec.sync().unwrap();
 
         group.bench_function(BenchmarkId::new("inclusive_scan", geometry), |b| {
@@ -516,7 +517,7 @@ fn bench_control_geometries(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("reduce", geometry), |b| {
             b.iter(|| {
-                let output = ForEachSegment(Reduce(Sum, 0u32))
+                let output = ForEachSegment(Reduce(Sum, init.clone()))
                     .run(
                         &exec,
                         SegmentIterator::new(

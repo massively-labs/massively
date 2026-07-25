@@ -17,12 +17,12 @@ pub fn solve<R: Runtime>(
     assert!(source < n);
     let degree = common::resident_degrees(exec, graph)?;
     let source_index = common::filled(exec, 1, source)?;
-    let mut rank = common::filled(exec, n as usize, 1.0 / n as f32)?;
+    let mut rank = common::filled(exec, n, 1.0 / n as f32)?;
 
     for _ in 0..iterations {
         let dangling = common::dangling_mass(exec, &rank, &degree)?;
         let base = damping * dangling / n as f32;
-        let output = common::filled(exec, n as usize, base)?;
+        let output = common::filled(exec, n, base)?;
         let source_rank = common::filled(exec, 1, base + 1.0 - damping)?;
         vector::scatter(
             exec,

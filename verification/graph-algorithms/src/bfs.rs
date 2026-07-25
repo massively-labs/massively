@@ -22,7 +22,7 @@ pub fn solve<R: Runtime>(
     source: u32,
 ) -> common::Result<DeviceVec<R, u32>> {
     assert!(source < graph.vertex_count());
-    let distance = common::filled(exec, graph.vertex_count() as usize, u32::MAX)?;
+    let distance = common::filled(exec, graph.vertex_count(), u32::MAX)?;
     let mut frontier = common::filled(exec, 1, source)?;
     let zero = common::filled(exec, 1, 0u32)?;
     vector::scatter(

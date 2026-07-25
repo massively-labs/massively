@@ -3,13 +3,14 @@
 mod common;
 
 use cubecl::prelude::*;
+use cubecl::wgpu::WgpuRuntime;
 use massively::seg::{
     AdjacentDifference, AdjacentFind, AllOf, AnyOf, CountIf, ExclusiveScan, Executable, Filter,
     FindIf, ForEachSegment, InclusiveScan, IsSorted, IsSortedUntil, Map, NoneOf, Reduce, Reverse,
     SegmentIterator, Sort, Take, Unique,
 };
 use massively::{
-    MStorage, op::BinaryPredicateOp, op::PredicateOp, op::ReductionOp, op::UnaryOp, zip2,
+    Executor, MStorage, op::BinaryPredicateOp, op::PredicateOp, op::ReductionOp, op::UnaryOp, zip2,
 };
 use oracle::{op, seg as reference};
 use proptest::prelude::*;
@@ -129,9 +130,11 @@ length_preserving_case!(seg_reverse, |_| Reverse, reference::reverse);
 length_preserving_case!(seg_inclusive_scan, |_| InclusiveScan(Sum), |segments| {
     reference::inclusive_scan(segments, Sum)
 });
-length_preserving_case!(seg_exclusive_scan, |_| ExclusiveScan(Sum, 7), |segments| {
-    reference::exclusive_scan(segments, Sum, 7)
-});
+length_preserving_case!(
+    seg_exclusive_scan,
+    |exec: &Executor<WgpuRuntime>| ExclusiveScan(Sum, exec.value(7).unwrap()),
+    |segments| { reference::exclusive_scan(segments, Sum, 7) }
+);
 length_preserving_case!(
     seg_adjacent_difference,
     |_| AdjacentDifference(Sum),
@@ -148,7 +151,7 @@ compacting_case!(seg_take, Take(37), |segments| reference::take(segments, 37));
 
 summarizing_case!(
     seg_reduce,
-    |_| Reduce(Sum, 7),
+    |exec: &Executor<WgpuRuntime>| Reduce(Sum, exec.value(7).unwrap()),
     |segments| reference::reduce(segments, Sum, 7)
 );
 summarizing_case!(seg_count_if, |_| CountIf(Even), |segments| {
@@ -433,7 +436,7 @@ pair_length_preserving_case!(
 );
 pair_length_preserving_case!(
     seg_pair_exclusive_scan,
-    |_| ExclusiveScan(PairSum, (7, 11)),
+    |exec: &Executor<WgpuRuntime>| ExclusiveScan(PairSum, exec.value((7, 11)).unwrap()),
     |segments| reference::exclusive_scan(segments, PairSum, (7, 11))
 );
 pair_length_preserving_case!(
@@ -452,9 +455,11 @@ pair_compacting_case!(seg_pair_take, Take(37), |segments| reference::take(
     segments, 37
 ));
 
-pair_item_reduce_case!(seg_pair_reduce, |_| Reduce(PairSum, (7, 11)), |segments| {
-    reference::reduce(segments, PairSum, (7, 11))
-});
+pair_item_reduce_case!(
+    seg_pair_reduce,
+    |exec: &Executor<WgpuRuntime>| Reduce(PairSum, exec.value((7, 11)).unwrap()),
+    |segments| { reference::reduce(segments, PairSum, (7, 11)) }
+);
 pair_flag_reduce_case!(seg_pair_count_if, CountIf(PairEven), |segments| {
     reference::count_if(segments, PairEven)
 });

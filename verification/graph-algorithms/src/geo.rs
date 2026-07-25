@@ -54,7 +54,7 @@ pub fn solve<R: Runtime>(
             exec,
             graph,
             lazy::permute(coordinates.slice(..), graph.destinations().slice(..)),
-            zero,
+            exec.value(zero)?,
             SumCoordinates,
         )?;
 

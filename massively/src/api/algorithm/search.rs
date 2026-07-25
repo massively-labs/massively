@@ -1,6 +1,46 @@
-use cubecl::prelude::Runtime;
+use cubecl::prelude::*;
 
-use crate::{Error, Executor, MFlag, MIndex, MIter, MVec, op::BinaryPredicateOp};
+use crate::{
+    Error, Executor, MFlag, MIndex, MIter, MVec, Scalar,
+    op::{BinaryPredicateOp, UnaryOp},
+};
+
+struct EqualLengthResult;
+
+#[cubecl::cube]
+impl UnaryOp<(MIndex, MIndex)> for EqualLengthResult {
+    type Output = MFlag;
+
+    fn apply(input: (MIndex, MIndex)) -> MFlag {
+        crate::flag::from_bool(input.0 >= input.1)
+    }
+}
+
+struct OptionalMismatch;
+
+#[cubecl::cube]
+impl UnaryOp<(MIndex, MIndex)> for OptionalMismatch {
+    type Output = MIndex;
+
+    fn apply(input: (MIndex, MIndex)) -> MIndex {
+        if input.0 < input.1 {
+            input.0
+        } else {
+            MIndex::MAX
+        }
+    }
+}
+
+struct RequiredMismatch;
+
+#[cubecl::cube]
+impl UnaryOp<(MIndex, MIndex)> for RequiredMismatch {
+    type Output = MIndex;
+
+    fn apply(input: (MIndex, MIndex)) -> MIndex {
+        input.0.min(input.1)
+    }
+}
 
 /// Finds the first source item equal to any needle.
 ///
@@ -26,28 +66,27 @@ use crate::{Error, Executor, MFlag, MIndex, MIter, MVec, op::BinaryPredicateOp};
 ///
 /// let index = find_first_of(&exec, source.slice(..), needles.slice(..), Equal).unwrap();
 ///
-/// assert_eq!(index, Some(2));
+/// assert_eq!(index.read(&exec).unwrap(), Some(2));
 /// ```
 pub fn find_first_of<R, Source, Needles, Equal>(
     exec: &Executor<R>,
     source: Source,
     needles: Needles,
     equal: Equal,
-) -> Result<Option<MIndex>, Error>
+) -> Result<Scalar<R, Option<MIndex>>, Error>
 where
     R: Runtime,
     Source: MIter<R>,
     Needles: MIter<R, Item = Source::Item>,
     Equal: BinaryPredicateOp<Source::Item>,
 {
-    let index = crate::search::find_first_of(
+    crate::search::find_first_of(
         exec,
         crate::api::iter::lower_fixed::<R, _>(source),
         crate::api::iter::lower_fixed::<R, _>(needles),
         equal,
     )?
-    .read(exec)?;
-    Ok((index != u32::MAX).then_some(index))
+    .into_optional_index()
 }
 
 /// Finds the lower bound of each value.
@@ -167,7 +206,10 @@ where
 /// let right = exec.to_device(&[1_u32, 2, 3]);
 ///
 /// assert!(massively::flag::is_set(
-///     equal(&exec, left.slice(..), right.slice(..), Equal).unwrap()
+///     equal(&exec, left.slice(..), right.slice(..), Equal)
+///         .unwrap()
+///         .read(&exec)
+///         .unwrap()
 /// ));
 /// ```
 pub fn equal<R, Left, Right, Equal>(
@@ -175,7 +217,7 @@ pub fn equal<R, Left, Right, Equal>(
     left: Left,
     right: Right,
     equal: Equal,
-) -> Result<MFlag, Error>
+) -> Result<Scalar<R, MFlag>, Error>
 where
     R: Runtime,
     Left: MIter<R>,
@@ -184,16 +226,21 @@ where
 {
     let left_len = left.len()?;
     let right_len = right.len()?;
+    if left_len != right_len {
+        return exec.value(crate::flag::from_bool(false));
+    }
     let mismatch = crate::search::equal(
         exec,
         crate::api::iter::lower_fixed::<R, _>(left),
         crate::api::iter::lower_fixed::<R, _>(right),
         equal,
-    )?
-    .read(exec)?;
-    Ok(crate::flag::from_bool(
-        left_len == right_len && mismatch >= left_len.min(right_len),
-    ))
+    )?;
+    let output = crate::vector::map(
+        exec,
+        crate::zip2(mismatch.as_iter(), crate::lazy::constant(left_len).take(1)),
+        EqualLengthResult,
+    )?;
+    Scalar::from_storage(output)
 }
 
 /// Returns the first mismatch.
@@ -218,14 +265,20 @@ where
 /// let left = exec.to_device(&[1_u32, 2, 3]);
 /// let right = exec.to_device(&[1_u32, 4, 3]);
 ///
-/// assert_eq!(mismatch(&exec, left.slice(..), right.slice(..), Equal).unwrap(), Some(1));
+/// assert_eq!(
+///     mismatch(&exec, left.slice(..), right.slice(..), Equal)
+///         .unwrap()
+///         .read(&exec)
+///         .unwrap(),
+///     Some(1)
+/// );
 /// ```
 pub fn mismatch<R, Left, Right, Equal>(
     exec: &Executor<R>,
     left: Left,
     right: Right,
     equal: Equal,
-) -> Result<Option<MIndex>, Error>
+) -> Result<Scalar<R, Option<MIndex>>, Error>
 where
     R: Runtime,
     Left: MIter<R>,
@@ -240,9 +293,14 @@ where
         crate::api::iter::lower_fixed::<R, _>(left),
         crate::api::iter::lower_fixed::<R, _>(right),
         equal,
-    )?
-    .read(exec)?;
-    Ok((index < shared_len || left_len != right_len).then_some(index.min(shared_len)))
+    )?;
+    let input = crate::zip2(index.as_iter(), crate::lazy::constant(shared_len).take(1));
+    let encoded = if left_len == right_len {
+        crate::vector::map(exec, input, OptionalMismatch)?
+    } else {
+        crate::vector::map(exec, input, RequiredMismatch)?
+    };
+    Scalar::<R, MIndex>::from_storage(encoded)?.into_optional_index()
 }
 
 /// Lexicographically compares two ranges.
@@ -268,7 +326,10 @@ where
 /// let right = exec.to_device(&[1_u32, 3, 0]);
 ///
 /// assert!(massively::flag::is_set(
-///     lexicographical_compare(&exec, left.slice(..), right.slice(..), Less).unwrap()
+///     lexicographical_compare(&exec, left.slice(..), right.slice(..), Less)
+///         .unwrap()
+///         .read(&exec)
+///         .unwrap()
 /// ));
 /// ```
 pub fn lexicographical_compare<R, Left, Right, Less>(
@@ -276,21 +337,17 @@ pub fn lexicographical_compare<R, Left, Right, Less>(
     left: Left,
     right: Right,
     less: Less,
-) -> Result<MFlag, Error>
+) -> Result<Scalar<R, MFlag>, Error>
 where
     R: Runtime,
     Left: MIter<R>,
     Right: MIter<R, Item = Left::Item>,
     Less: BinaryPredicateOp<Left::Item>,
 {
-    Ok(crate::flag::from_bool(
-        crate::search::lexicographical_compare(
-            exec,
-            crate::api::iter::lower_fixed::<R, _>(left),
-            crate::api::iter::lower_fixed::<R, _>(right),
-            less,
-        )?
-        .read(exec)?
-            != 0,
-    ))
+    crate::search::lexicographical_compare(
+        exec,
+        crate::api::iter::lower_fixed::<R, _>(left),
+        crate::api::iter::lower_fixed::<R, _>(right),
+        less,
+    )
 }

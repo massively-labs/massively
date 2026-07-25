@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-forbidden='MVal|MExtent|MSequence|Iteration|SegmentKeyInput|SegmentedValues|SegmentContextRead|SegmentRead|CanonicalAlloc|CanonicalStorage|CanonicalAbi|ScratchAbi|SortAbi|ItemDispatch|MutableItem|MutableDispatch|ConcreteOutput|OutputOperation|RadixKeyAbi|RadixStorage|LayoutCompatible|AllocColumns|RowAlloc|ScratchStorage|KernelRow|GatherInput|KernelInput|IterLength|SliceExpression|ReadExpression|OutputExpression|StorageLayout|MaterializeDispatch|ReduceDispatch|ReadArity|StorageArity|Eval[1-8]|\bColumn\b'
-rejected_public_abstractions='MVal|MExtent|MSequence|Iteration|SegmentContexts'
+forbidden='MExtent|MSequence|Iteration|SegmentKeyInput|SegmentedValues|SegmentContextRead|SegmentRead|CanonicalAlloc|CanonicalStorage|CanonicalAbi|ScratchAbi|SortAbi|ItemDispatch|MutableItem|MutableDispatch|ConcreteOutput|OutputOperation|RadixKeyAbi|RadixStorage|LayoutCompatible|AllocColumns|RowAlloc|ScratchStorage|KernelRow|GatherInput|KernelInput|IterLength|SliceExpression|ReadExpression|OutputExpression|StorageLayout|MaterializeDispatch|ReduceDispatch|ReadArity|StorageArity|Eval[1-8]|\bColumn\b'
+rejected_public_abstractions='MValue|MExtent|MSequence|Iteration|SegmentContexts'
 
 if rg -n -g '*.html' "$rejected_public_abstractions" target/doc/massively; then
     echo 'rejected abstractions leaked into the public API documentation' >&2
@@ -13,6 +13,7 @@ mapfile -d '' pages < <(
     find target/doc/massively -type f \
         \( -name 'fn.*.html' -o -name 'trait.RadixKey.html' \
         -o -name 'trait.MAlloc.html' \
+        -o -name 'trait.MVal.html' \
         -o -name 'trait.MIter.html' -o -name 'trait.MIterMut.html' \
         -o -name 'trait.MStorage.html' \) \
         -print0
@@ -28,13 +29,19 @@ legacy_pages=(
     trait.MItem.html trait.MScratchItem.html trait.MSortItem.html trait.MutableItem.html
     struct.Zip.html struct.SegmentRead.html struct.SegmentContextRead.html
     struct.SegmentContexts.html
-    struct.MVal.html struct.MExtent.html
-    trait.MSequence.html type.MBool.html
+    struct.MExtent.html
+    trait.MValue.html trait.MSequence.html type.MBool.html
 )
 
 for page in "${legacy_pages[@]}"; do
     test -z "$(find target/doc/massively -type f -name "$page" -print -quit)"
 done
+
+test -f "target/doc/massively/trait.MVal.html"
+test -f "target/doc/massively/struct.Scalar.html"
+test ! -e "target/doc/massively/struct.HostVal.html"
+test ! -e "target/doc/massively/struct.DeviceVal.html"
+test ! -e "target/doc/massively/struct.MVal.html"
 
 for arity in {2..12}; do
     test -z "$(find target/doc/massively -type f -name "fn.unzip${arity}.html" -print -quit)"
@@ -61,6 +68,21 @@ for algorithm in "${algorithms[@]}"; do
     test -f "target/doc/massively/vector/fn.${algorithm}.html"
     test ! -e "target/doc/massively/fn.${algorithm}.html"
 done
+
+scalar_value_algorithms=(
+    exclusive_scan exclusive_scan_by_key fill reduce reduce_by_key replace_where scatter_reduce
+)
+
+for algorithm in "${scalar_value_algorithms[@]}"; do
+    rg -q 'MVal' "target/doc/massively/vector/fn.${algorithm}.html"
+done
+
+mapfile -t executor_pages < <(find target/doc/massively -name 'struct.Executor.html')
+test "${#executor_pages[@]}" -gt 0
+rg -q 'Scalar' "${executor_pages[@]}"
+rg -q 'MVal' "${executor_pages[@]}"
+rg -q 'MIndex' "${executor_pages[@]}"
+! rg -q 'fill_with' "target/doc/massively/trait.MIterMut.html"
 
 test -f "target/doc/massively/seg/struct.Segmentation.html"
 test ! -e "target/doc/massively/struct.Segmentation.html"

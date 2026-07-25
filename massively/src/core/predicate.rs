@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use cubecl::prelude::*;
 
 use crate::{
-    DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MVal, ReadExpression,
+    DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, ReadExpression, Scalar,
     Transform,
     op::{IndexedBinaryOp, IndexedUnaryOp, UnaryOp},
     output::StageOutput,
@@ -35,7 +35,7 @@ use crate::{
 /// let input = exec.to_device(&[-1_i32, 2, 3]);
 ///
 /// let count = count_if(&exec, input.slice(..), Positive).unwrap();
-/// assert_eq!(count, 2);
+/// assert_eq!(count.read(&exec).unwrap(), 2);
 /// ```
 #[cubecl::cube]
 pub trait PredicateOp<Input: CubeType>: 'static + Send + Sync {
@@ -243,12 +243,12 @@ pub(crate) fn count_if<R, Input, Pred>(
     exec: &Executor<R>,
     input: Input,
     _pred: Pred,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: PredicateInput<R, Pred>,
 {
-    MVal::from_storage(input.predicate_count(exec)?)
+    Scalar::from_storage(input.predicate_count(exec)?)
 }
 
 /// Returns the first matching index, or `u32::MAX` when none matches.
@@ -256,12 +256,12 @@ pub(crate) fn find_if<R, Input, Pred>(
     exec: &Executor<R>,
     input: Input,
     _pred: Pred,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: PredicateInput<R, Pred>,
 {
-    MVal::from_storage(input.predicate_first(exec)?)
+    Scalar::from_storage(input.predicate_first(exec)?)
 }
 
 /// Returns the first partition violation, or `u32::MAX` when there is none.
@@ -269,12 +269,12 @@ pub(crate) fn is_partitioned<R, Input, Pred>(
     exec: &Executor<R>,
     input: Input,
     _pred: Pred,
-) -> Result<MVal<R, u32>, Error>
+) -> Result<Scalar<R, u32>, Error>
 where
     R: Runtime,
     Input: PredicateInput<R, Pred>,
 {
-    MVal::from_storage(input.predicate_is_partitioned(exec)?)
+    Scalar::from_storage(input.predicate_is_partitioned(exec)?)
 }
 
 #[cfg(test)]

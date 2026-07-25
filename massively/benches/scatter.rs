@@ -38,7 +38,7 @@ fn bench_scatter(c: &mut Criterion) {
             .map(|index| (index % (len / 4).max(1)) as u32)
             .collect();
         let collision_indices = exec.to_device(&collision_indices);
-        let init = 0.0_f32;
+        let init = exec.value(0.0_f32).unwrap();
         group.bench_function(BenchmarkId::new("reduce_4_to_1", len), |b| {
             b.iter(|| {
                 scatter_reduce(

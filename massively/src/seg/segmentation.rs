@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 use std::ops::RangeBounds;
 
-use crate::{DeviceSlice, DeviceVec, Error, Executor, MIndex, MIter};
+use crate::{DeviceSlice, DeviceVec, Error, Executor, MIndex, MIter, MVal};
 
 use super::{ExclusiveScan, Executable, ForEachSegment, SegmentIterator};
 
@@ -71,14 +71,10 @@ fn mark_zero_based_heads_kernel(offsets: &[u32], heads: &mut [u32]) {
     }
 }
 
-fn checked_offset_count(segment_count: usize) -> Result<usize, Error> {
-    let offset_count = segment_count
+fn checked_offset_count(segment_count: MIndex) -> Result<MIndex, Error> {
+    segment_count
         .checked_add(1)
-        .ok_or(Error::LengthTooLarge { len: usize::MAX })?;
-    if MIndex::try_from(offset_count).is_err() {
-        return Err(Error::LengthTooLarge { len: offset_count });
-    }
-    Ok(offset_count)
+        .ok_or(Error::LengthTooLarge { len: usize::MAX })
 }
 
 /// A reusable partition of one flat value range into ordered segments.
@@ -196,11 +192,13 @@ impl<R: Runtime> Segmentation<R> {
         }
 
         let status = exec.to_device(&[0u32, 0u32]);
-        let offset_count = offsets.len() as usize;
+        let offset_count = offsets.len();
         unsafe {
             validate_offsets_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(offset_count.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (offset_count as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(offsets.handle.clone(), offsets.capacity()),
                 BufferArg::from_raw_parts(status.handle.clone(), status.capacity()),
@@ -225,7 +223,7 @@ impl<R: Runtime> Segmentation<R> {
     where
         Lengths: MIter<R, Item = MIndex>,
     {
-        let segment_count = lengths.len()? as usize;
+        let segment_count = lengths.len()?;
         let offset_count = checked_offset_count(segment_count)?;
         if segment_count == 0 {
             return Ok(Self {
@@ -241,7 +239,9 @@ impl<R: Runtime> Segmentation<R> {
         unsafe {
             offsets_from_prefix_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(segment_count.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (segment_count as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(prefix.handle.clone(), prefix.capacity()),
                 BufferArg::from_raw_parts(offsets.handle.clone(), offsets.capacity()),
@@ -270,12 +270,23 @@ impl<R: Runtime> Segmentation<R> {
     pub fn from_segment_ids<Ids>(
         exec: &Executor<R>,
         ids: Ids,
+        segment_count: impl MVal<R, MIndex>,
+    ) -> Result<Self, Error>
+    where
+        Ids: MIter<R, Item = MIndex>,
+    {
+        Self::from_segment_ids_host(exec, ids, segment_count.into_host(exec)?)
+    }
+
+    fn from_segment_ids_host<Ids>(
+        exec: &Executor<R>,
+        ids: Ids,
         segment_count: MIndex,
     ) -> Result<Self, Error>
     where
         Ids: MIter<R, Item = MIndex>,
     {
-        let offset_count = checked_offset_count(segment_count as usize)?;
+        let offset_count = checked_offset_count(segment_count)?;
         let ids = crate::api::iter::materialize_exact_u32(exec, ids)?;
         let value_count = ids.len();
 
@@ -303,15 +314,12 @@ impl<R: Runtime> Segmentation<R> {
         }
 
         let offsets = if value_count == 0 {
-            exec.full(
-                MIndex::try_from(offset_count).expect("offset count was validated"),
-                0u32,
-            )?
+            exec.full(offset_count, 0u32)?
         } else {
             crate::vector::lower_bound(
                 exec,
                 ids.slice(..),
-                crate::lazy::counting(0).take(offset_count as MIndex),
+                crate::lazy::counting(0).take(offset_count),
                 super::control::LessU32,
             )?
         };
@@ -372,13 +380,15 @@ impl<R: Runtime> Segmentation<R> {
             return Ok(ids);
         }
 
-        let heads = exec.full(value_count, 0u32)?;
-        let segment_count = self.segment_count() as usize;
+        let heads = exec.full(value_count, exec.value(0u32)?)?;
+        let segment_count = self.segment_count();
         if segment_count != 0 {
             unsafe {
                 mark_zero_based_heads_kernel::launch_unchecked::<R>(
                     exec.client(),
-                    crate::launch::cube_count_1d(segment_count.div_ceil(BLOCK_SIZE as usize))?,
+                    crate::launch::cube_count_1d(
+                        (segment_count as usize).div_ceil(BLOCK_SIZE as usize),
+                    )?,
                     CubeDim::new_1d(BLOCK_SIZE),
                     BufferArg::from_raw_parts(self.offsets.handle.clone(), self.offsets.capacity()),
                     BufferArg::from_raw_parts(heads.handle.clone(), heads.capacity()),

@@ -119,7 +119,13 @@ fn strengths<R: Runtime>(
     exec: &Executor<R>,
     graph: &DeviceWeightedCsr<R, u32>,
 ) -> common::Result<DeviceVec<R, u32>> {
-    common::reduce_rows(exec, graph.graph(), graph.weights().slice(..), 0, SumU32)
+    common::reduce_rows(
+        exec,
+        graph.graph(),
+        graph.weights().slice(..),
+        exec.value(0)?,
+        SumU32,
+    )
 }
 
 fn local_move<R: Runtime>(
@@ -129,7 +135,7 @@ fn local_move<R: Runtime>(
 ) -> common::Result<DeviceVec<R, u32>> {
     let topology = graph.graph();
     let n = topology.vertex_count();
-    let m2 = vector::reduce(exec, graph.weights().slice(..), 0, SumU32)?;
+    let m2 = vector::reduce(exec, graph.weights().slice(..), exec.value(0)?, SumU32)?.read(exec)?;
     let strength = strengths(exec, graph)?;
     let communities = vector::map(exec, common::counting_u32(0, n as usize), Identity)?;
     let totals = vector::map(exec, strength.slice(..), Identity)?;
@@ -222,7 +228,7 @@ fn local_move<R: Runtime>(
                     sorted_communities.slice(..),
                     sorted_weights.slice(..),
                     EqualU32,
-                    0,
+                    exec.value(0)?,
                     SumU32,
                 )?,
             )?;
@@ -247,6 +253,7 @@ fn local_move<R: Runtime>(
                 zip2(scores.slice(..), unique_communities.slice(..)),
                 CandidateLess,
             )?
+            .read(exec)?
             .expect("the current community is always a candidate");
             let current_location = vector::lower_bound(
                 exec,
@@ -327,7 +334,7 @@ fn contract<R: Runtime>(
             sorted_pairs.slice(..),
             sorted_weights.slice(..),
             PairEqual,
-            0,
+            exec.value(0)?,
             SumU32,
         )?,
     )?;
@@ -340,11 +347,11 @@ fn contract<R: Runtime>(
             pair_sources.slice(..),
             lazy::constant(1u32).take(edge_count),
             EqualU32,
-            0,
+            exec.value(0)?,
             SumU32,
         )?,
     )?;
-    let counts = common::filled(exec, community_count as usize, 0u32)?;
+    let counts = common::filled(exec, community_count, 0u32)?;
     vector::scatter(
         exec,
         row_counts.slice(..),
@@ -352,7 +359,13 @@ fn contract<R: Runtime>(
         counts.slice_mut(..),
     )?;
     let ends = vector::inclusive_scan(exec, counts.slice(..), SumU32)?;
-    let offsets = common::filled(exec, community_count as usize + 1, 0u32)?;
+    let offsets = common::filled(
+        exec,
+        community_count
+            .checked_add(1)
+            .expect("offset count exceeds MIndex"),
+        0u32,
+    )?;
     vector::scatter(
         exec,
         ends.slice(..),
@@ -371,7 +384,14 @@ pub fn solve<R: Runtime>(
 ) -> common::Result<DeviceVec<R, u32>> {
     let n = graph.vertex_count();
     assert!(n != 0);
-    let weights = common::filled(exec, graph.edge_count(), 1u32)?;
+    let weights = common::filled(
+        exec,
+        graph
+            .edge_count()
+            .try_into()
+            .expect("edge count exceeds MIndex"),
+        1u32,
+    )?;
     let mut level_graph = DeviceWeightedCsr::from_parts(graph.clone(), weights)?;
     let mut assignment = vector::map(exec, common::counting_u32(0, n as usize), Identity)?;
 

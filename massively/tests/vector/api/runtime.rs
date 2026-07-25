@@ -64,3 +64,40 @@ fn allocation_lengths_are_mindex_values() {
     assert_eq!(allocated.len(), len);
     assert_eq!(exec.to_host(&filled).unwrap(), vec![7, 7, 7]);
 }
+
+#[test]
+fn executor_values_round_trip_through_mval() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+
+    assert_eq!(exec.value(7_u32).unwrap().read(&exec).unwrap(), 7);
+    let pair = exec.value((3_u32, 2.5_f32)).unwrap();
+    assert_eq!(pair.clone().read(&exec).unwrap(), (3, 2.5));
+    assert_eq!(pair.read(&exec).unwrap(), (3, 2.5));
+}
+
+#[test]
+fn mval_resolves_host_and_device_representations_in_both_directions() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+
+    let from_plain_host: Scalar<WgpuRuntime, u32> = MVal::into_device(7_u32, &exec).unwrap();
+    assert_eq!(MVal::into_host(from_plain_host, &exec).unwrap(), 7);
+
+    let host = 11_u32;
+    let device: Scalar<WgpuRuntime, u32> = MVal::into_device(host, &exec).unwrap();
+    assert_eq!(MVal::into_host(&device, &exec).unwrap(), 11);
+    assert_eq!(device.read(&exec).unwrap(), 11);
+}
+
+#[test]
+fn scalar_exposes_a_one_item_iterator_for_gather_and_permute() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let scalar = exec.value(7_u32).unwrap();
+    let indices = lazy::constant(0_u32).take(3);
+
+    let gathered = vector::gather(&exec, scalar.as_iter(), indices.clone()).unwrap();
+    let permuted = lazy::permute(scalar.as_iter(), indices);
+    let materialized = vector::map(&exec, permuted, op::Identity).unwrap();
+
+    assert_eq!(exec.to_host(&gathered).unwrap(), vec![7, 7, 7]);
+    assert_eq!(exec.to_host(&materialized).unwrap(), vec![7, 7, 7]);
+}

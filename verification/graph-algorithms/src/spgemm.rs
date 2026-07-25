@@ -48,9 +48,10 @@ pub fn solve<R: Runtime>(
     let capacity = vector::reduce(
         exec,
         lazy::permute(rhs_degrees.slice(..), lhs.destinations().slice(..)),
-        0,
+        exec.value(0)?,
         SumU32,
-    )?;
+    )?
+    .read(exec)?;
     let destinations = exec.alloc::<u32>(capacity);
     let offsets = exec.alloc::<u32>(n.checked_add(1).expect("offset count exceeds MIndex"));
     let mut output_len = 0u32;

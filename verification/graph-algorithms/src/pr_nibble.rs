@@ -151,7 +151,7 @@ pub fn solve<R: Runtime>(
         SweepOrder,
     )?;
 
-    let positions = common::filled(exec, n as usize, 0u32)?;
+    let positions = common::filled(exec, n, 0u32)?;
     vector::scatter(
         exec,
         common::counting_u32(0, n as usize),
@@ -170,7 +170,7 @@ pub fn solve<R: Runtime>(
             ),
             EarlierNeighbor,
         ),
-        0,
+        exec.value(0)?,
         SumU32,
     )?;
     let ordered_degree = vector::gather(exec, degree.slice(..), common::indices(order.slice(..)))?;
@@ -199,6 +199,7 @@ pub fn solve<R: Runtime>(
         zip2(conductance.slice(..), common::counting_u32(0, n as usize)),
         BestPrefix,
     )?
+    .read(exec)?
     .expect("a nonempty graph has a nonempty sweep order");
 
     vector::map(exec, order.slice(..best + 1), massively::op::Identity)

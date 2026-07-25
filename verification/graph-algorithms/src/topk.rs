@@ -83,7 +83,7 @@ pub fn solve<R: Runtime>(
     }
 
     let out_degree = common::resident_degrees(exec, graph)?;
-    let in_degree = common::filled(exec, n as usize, 0u32)?;
+    let in_degree = common::filled(exec, n, 0u32)?;
     if graph.edge_count() != 0 {
         let edge_count =
             u32::try_from(graph.edge_count()).map_err(|_| massively::Error::LengthTooLarge {
@@ -93,7 +93,7 @@ pub fn solve<R: Runtime>(
             exec,
             lazy::constant(1u32).take(edge_count),
             graph.destinations().slice(..),
-            0,
+            exec.value(0)?,
             SumU32,
             in_degree.slice_mut(..),
         )?;

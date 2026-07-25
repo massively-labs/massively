@@ -130,14 +130,14 @@ pub fn solve<R: Runtime>(
     }
 
     let out_degree = common::resident_degrees(exec, graph)?;
-    let in_degree = common::filled(exec, n as usize, 0u32)?;
+    let in_degree = common::filled(exec, n, 0u32)?;
     if graph.edge_count() != 0 {
         let edge_count = u32::try_from(graph.edge_count()).expect("edge count exceeds u32");
         vector::scatter_reduce(
             exec,
             lazy::constant(1u32).take(edge_count),
             graph.destinations().slice(..),
-            0u32,
+            exec.value(0u32)?,
             SumU32,
             in_degree.slice_mut(..),
         )?;
@@ -148,6 +148,7 @@ pub fn solve<R: Runtime>(
         AddU32,
     )?;
     let max_index = vector::max_element(exec, incidence.slice(..), common::LessU32)?
+        .read(exec)?
         .expect("the graph has at least one vertex");
     let max_incidence = exec.to_host(&incidence.slice(max_index..max_index + 1))?[0].max(1);
     let step = 0.9f32 / (2.0f32 * max_incidence as f32).sqrt();
@@ -199,7 +200,7 @@ pub fn solve<R: Runtime>(
     vector::copy(exec, signal.slice(..), current.slice_mut(..))?;
     let mut extrapolated = exec.alloc::<f32>(signal.len());
     vector::copy(exec, signal.slice(..), extrapolated.slice_mut(..))?;
-    let mut dual = common::filled(exec, edge_features as usize, 0.0f32)?;
+    let mut dual = common::filled(exec, edge_features, 0.0f32)?;
 
     for _ in 0..iterations {
         let source_values = vector::gather(
@@ -224,12 +225,12 @@ pub fn solve<R: Runtime>(
             DualStep,
         )?;
 
-        let divergence = common::filled(exec, signal.len() as usize, 0.0f32)?;
+        let divergence = common::filled(exec, signal.len(), 0.0f32)?;
         vector::scatter_reduce(
             exec,
             dual.slice(..),
             source_indices.slice(..),
-            0.0f32,
+            exec.value(0.0f32)?,
             SumF32,
             divergence.slice_mut(..),
         )?;
@@ -237,7 +238,7 @@ pub fn solve<R: Runtime>(
             exec,
             lazy::map(dual.slice(..), Negate),
             destination_indices.slice(..),
-            0.0f32,
+            exec.value(0.0f32)?,
             SumF32,
             divergence.slice_mut(..),
         )?;

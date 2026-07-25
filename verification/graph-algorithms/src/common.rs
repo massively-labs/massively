@@ -1,6 +1,6 @@
 use cubecl::prelude::*;
 use massively::{
-    DeviceSlice, DeviceVec, Executor, MAlloc, MIter, MStorage, MVec, lazy,
+    DeviceSlice, DeviceVec, Executor, MAlloc, MIndex, MIter, MStorage, MVec, lazy,
     op::{BinaryPredicateOp, ExpandOp, ReductionOp, UnaryOp},
     seg::{Executable, ForEachSegment, Reduce, Segment, Segmentation},
     vector, zip2, zip3,
@@ -56,26 +56,26 @@ pub(crate) fn stencil<Input>(input: Input) -> Input {
 }
 
 pub(crate) trait FillValue<R: Runtime>: Sized {
-    fn filled(exec: &Executor<R>, len: usize, value: Self) -> Result<DeviceVec<R, Self>>;
+    fn filled(exec: &Executor<R>, len: MIndex, value: Self) -> Result<DeviceVec<R, Self>>;
 }
 
 impl<R: Runtime> FillValue<R> for u32 {
-    fn filled(exec: &Executor<R>, len: usize, value: Self) -> Result<DeviceVec<R, Self>> {
-        let output = exec.alloc::<u32>(len.try_into().unwrap());
+    fn filled(exec: &Executor<R>, len: MIndex, value: Self) -> Result<DeviceVec<R, Self>> {
+        let output = exec.alloc::<u32>(len);
         vector::fill(exec, value, output.slice_mut(..))?;
         Ok(output)
     }
 }
 
 impl<R: Runtime> FillValue<R> for f32 {
-    fn filled(exec: &Executor<R>, len: usize, value: Self) -> Result<DeviceVec<R, Self>> {
-        let output = exec.alloc::<f32>(len.try_into().unwrap());
+    fn filled(exec: &Executor<R>, len: MIndex, value: Self) -> Result<DeviceVec<R, Self>> {
+        let output = exec.alloc::<f32>(len);
         vector::fill(exec, value, output.slice_mut(..))?;
         Ok(output)
     }
 }
 
-pub(crate) fn filled<R, T>(exec: &Executor<R>, len: usize, value: T) -> Result<DeviceVec<R, T>>
+pub(crate) fn filled<R, T>(exec: &Executor<R>, len: MIndex, value: T) -> Result<DeviceVec<R, T>>
 where
     R: Runtime,
     T: FillValue<R>,
@@ -329,7 +329,7 @@ pub(crate) fn reduce_rows<R, Values, Item, Op>(
     exec: &Executor<R>,
     graph: &DeviceCsr<R>,
     values: Values,
-    init: Item,
+    init: massively::Scalar<R, Item>,
     op: Op,
 ) -> Result<MVec<R, Item>>
 where
@@ -435,7 +435,7 @@ pub(crate) fn relax_min<R: Runtime>(
         sorted_destinations.slice(..),
         sorted_proposals.slice(..),
         EqualU32,
-        infinity,
+        exec.value(infinity)?,
         MinU32,
     )?;
     let old = vector::gather(exec, state.slice(..), destinations.slice(..))?;
@@ -468,7 +468,13 @@ pub(crate) fn weighted_csr_from_edges<R: Runtime>(
             DeviceCsr::from_parts(
                 exec,
                 exec.alloc::<u32>(0),
-                filled(exec, vertex_count as usize + 1, 0u32)?,
+                filled(
+                    exec,
+                    vertex_count
+                        .checked_add(1)
+                        .expect("offset count exceeds MIndex"),
+                    0u32,
+                )?,
             )?,
             exec.alloc::<u32>(0),
         );
@@ -484,7 +490,7 @@ pub(crate) fn weighted_csr_from_edges<R: Runtime>(
             sorted_pairs.slice(..),
             sorted_weights.slice(..),
             EdgePairEqual,
-            0u32,
+            exec.value(0u32)?,
             SumU32,
         )?,
     )?;
@@ -497,11 +503,11 @@ pub(crate) fn weighted_csr_from_edges<R: Runtime>(
             sources.slice(..),
             lazy::constant(1u32).take(edge_count),
             EqualU32,
-            0u32,
+            exec.value(0u32)?,
             SumU32,
         )?,
     )?;
-    let counts = filled(exec, vertex_count as usize, 0u32)?;
+    let counts = filled(exec, vertex_count, 0u32)?;
     vector::scatter(
         exec,
         row_counts.slice(..),
@@ -509,7 +515,13 @@ pub(crate) fn weighted_csr_from_edges<R: Runtime>(
         counts.slice_mut(..),
     )?;
     let ends = vector::inclusive_scan(exec, counts.slice(..), SumU32)?;
-    let offsets = filled(exec, vertex_count as usize + 1, 0u32)?;
+    let offsets = filled(
+        exec,
+        vertex_count
+            .checked_add(1)
+            .expect("offset count exceeds MIndex"),
+        0u32,
+    )?;
     vector::scatter(
         exec,
         ends.slice(..),
@@ -569,9 +581,10 @@ pub(crate) fn dangling_mass<R: Runtime>(
     vector::reduce(
         exec,
         lazy::map(zip2(rank.slice(..), degree.slice(..)), DanglingRank),
-        0.0,
+        exec.value(0.0)?,
         SumF32,
-    )
+    )?
+    .read(exec)
 }
 
 pub(crate) fn accumulate_rank<R: Runtime>(
@@ -599,7 +612,7 @@ pub(crate) fn accumulate_rank<R: Runtime>(
         exec,
         contributions,
         graph.destinations().slice(..),
-        0.0,
+        exec.value(0.0)?,
         SumF32,
         output.slice_mut(..),
     )

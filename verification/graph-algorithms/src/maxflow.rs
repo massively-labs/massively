@@ -84,8 +84,8 @@ fn augmenting_path<R: Runtime>(
     sink: u32,
 ) -> common::Result<Option<Vec<u32>>> {
     let n = topology.vertex_count();
-    let visited = common::filled(exec, n as usize, 0u32)?;
-    let parent_edge = common::filled(exec, n as usize, u32::MAX)?;
+    let visited = common::filled(exec, n, 0u32)?;
+    let parent_edge = common::filled(exec, n, u32::MAX)?;
     vector::scatter(
         exec,
         lazy::constant(1u32).take(1),
@@ -187,7 +187,7 @@ pub fn solve<R: Runtime>(
         .expect("residual edge capacity exceeds u32");
     let residual_sources = exec.alloc::<u32>(residual_count);
     let residual_destinations = exec.alloc::<u32>(residual_count);
-    let residual_capacities = common::filled(exec, residual_count as usize, 0u32)?;
+    let residual_capacities = common::filled(exec, residual_count, 0u32)?;
     vector::copy(
         exec,
         original_sources.slice(..),
@@ -236,7 +236,13 @@ pub fn solve<R: Runtime>(
     {
         let path = exec.to_device(&path);
         let capacity = vector::gather(exec, residual.slice(..), common::indices(path.slice(..)))?;
-        let bottleneck = vector::reduce(exec, capacity.slice(..), u32::MAX, common::MinU32)?;
+        let bottleneck = vector::reduce(
+            exec,
+            capacity.slice(..),
+            exec.value(u32::MAX)?,
+            common::MinU32,
+        )?
+        .read(exec)?;
         assert!(bottleneck != 0);
         let forward = vector::map(
             exec,

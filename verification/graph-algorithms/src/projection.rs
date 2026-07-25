@@ -49,7 +49,7 @@ pub fn solve<R: Runtime>(
         NeighborPairs,
     )?;
     let (sources, destinations) = massively::MStorage::into_columns(pairs);
-    let weights = common::filled(exec, sources.len() as usize, 1u32)?;
+    let weights = common::filled(exec, sources.len(), 1u32)?;
     common::weighted_csr_from_edges(
         exec,
         graph.vertex_count(),

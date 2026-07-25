@@ -36,18 +36,31 @@ fn bench_ordering_query(c: &mut Criterion) {
     for &len in SIZES {
         group.bench_function(BenchmarkId::new("min_element_lazy", len), |b| {
             b.iter(|| {
-                black_box(min_element(&exec, lazy::counting(0).take(len as u32), LessU32).unwrap())
+                black_box(
+                    min_element(&exec, lazy::counting(0).take(len as u32), LessU32)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
+                )
             })
         });
         group.bench_function(BenchmarkId::new("max_element_lazy", len), |b| {
             b.iter(|| {
-                black_box(max_element(&exec, lazy::counting(0).take(len as u32), LessU32).unwrap())
+                black_box(
+                    max_element(&exec, lazy::counting(0).take(len as u32), LessU32)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
+                )
             })
         });
         group.bench_function(BenchmarkId::new("minmax_element_lazy", len), |b| {
             b.iter(|| {
                 black_box(
-                    minmax_element(&exec, lazy::counting(0).take(len as u32), LessU32).unwrap(),
+                    minmax_element(&exec, lazy::counting(0).take(len as u32), LessU32)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
                 )
             })
         });
@@ -72,6 +85,8 @@ fn bench_ordering_query(c: &mut Criterion) {
                         ),
                         FirstLeafLess,
                     )
+                    .unwrap()
+                    .read(&exec)
                     .unwrap(),
                 )
             })

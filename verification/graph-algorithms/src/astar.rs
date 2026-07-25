@@ -79,9 +79,9 @@ pub fn solve<R: Runtime>(
     assert!(target < n);
     assert_eq!(heuristic.len(), n);
 
-    let distance = common::filled(exec, n as usize, INF)?;
-    let predecessor = common::filled(exec, n as usize, u32::MAX)?;
-    let open = common::filled(exec, n as usize, 0u32)?;
+    let distance = common::filled(exec, n, INF)?;
+    let predecessor = common::filled(exec, n, u32::MAX)?;
+    let open = common::filled(exec, n, 0u32)?;
     vector::scatter(
         exec,
         lazy::constant(0u32).take(1),
@@ -129,6 +129,7 @@ pub fn solve<R: Runtime>(
             zip2(scores.slice(..), open_vertices.slice(..)),
             common::EdgePairLess,
         )?
+        .read(exec)?
         .expect("the open set is non-empty");
         let current = exec.to_host(&open_vertices.slice(best..best + 1))?[0];
         let current_distance = exec.to_host(&distance.slice(current..current + 1))?[0];

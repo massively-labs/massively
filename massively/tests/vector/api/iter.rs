@@ -340,7 +340,7 @@ fn mutable_slice_adapters_compose_and_can_be_read_back() {
 
     massively::vector::replace_where(
         &exec,
-        (7_u32, 9_u32),
+        exec.value((7_u32, 9_u32)).unwrap(),
         lazy::constant(1_u32).take(1),
         output.slice_mut(1..4).slice_mut(1..2),
     )

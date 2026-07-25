@@ -132,7 +132,7 @@ pub fn solve<R: Runtime>(
         circle_vertices.slice_mut(..),
     )?;
 
-    let member = common::filled(exec, n as usize, 0u32)?;
+    let member = common::filled(exec, n, 0u32)?;
     vector::scatter(
         exec,
         lazy::constant(1u32).take(circle_size),
@@ -160,7 +160,7 @@ pub fn solve<R: Runtime>(
         )?,
     )?;
     let (induced_sources, induced_destinations) = MStorage::into_columns(induced_edges);
-    let induced_weights = common::filled(exec, induced_sources.len() as usize, 1u32)?;
+    let induced_weights = common::filled(exec, induced_sources.len(), 1u32)?;
     let induced = common::weighted_csr_from_edges(
         exec,
         n,

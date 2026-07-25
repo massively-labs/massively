@@ -2,7 +2,7 @@ use cubecl::prelude::*;
 use massively::{op::*, *};
 use oracle::{op, vector as reference};
 
-use super::common::exec;
+use super::common::{exec, read_value};
 
 const A13_SCALE_LEN: usize = 65_537;
 
@@ -107,7 +107,11 @@ fn lazify_reduce_at_read_arity_13() {
     let zero = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
     assert_eq!(
-        massively::vector::reduce(&exec, lazified, zero, MaxTwelve).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::reduce(&exec, lazified, exec.value(zero).unwrap(), MaxTwelve)
+                .unwrap(),
+        ),
         reference::reduce(&aos, zero, MaxTwelve),
     );
 }

@@ -47,7 +47,7 @@ pub fn solve<R: Runtime>(
         common::counting_u32(0, n as usize),
         GreaterU32,
     )?;
-    let colors = common::filled(exec, n as usize, u32::MAX)?;
+    let colors = common::filled(exec, n, u32::MAX)?;
 
     for position in 0..n as usize {
         let vertex = read_u32(exec, &order, position as u32)?;
@@ -64,7 +64,8 @@ pub fn solve<R: Runtime>(
                     lazy::constant(color).take(neighbor_count),
                 ),
                 EqualPair,
-            )?;
+            )?
+            .read(exec)?;
             if used == 0 {
                 break;
             }

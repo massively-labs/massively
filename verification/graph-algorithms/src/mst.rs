@@ -55,7 +55,7 @@ pub fn solve<R: Runtime>(
         common::counting_u32(0, topology.vertex_count() as usize),
         Identity,
     )?;
-    let selected = common::filled(exec, edge_count as usize, 0u32)?;
+    let selected = common::filled(exec, edge_count, 0u32)?;
 
     for position in 0..edge_count {
         let edge = read_u32(exec, &edge_order, position)?;
@@ -77,7 +77,7 @@ pub fn solve<R: Runtime>(
         )?;
         vector::replace_where(
             exec,
-            source_component,
+            exec.value(source_component)?,
             common::stencil(stencil.slice(..)),
             components.slice_mut(..),
         )?;

@@ -157,33 +157,51 @@ an `MVec`. Algorithms whose semantics require an existing destination, such as
 ```rust
 let output = map(&exec, input, op)?;
 let sum = reduce(&exec, input, zero, sum_op)?;
+let continued = reduce(&exec, more_input, &sum, sum_op)?;
+let host_sum = sum.read(&exec)?;
 ```
 
-Host/device movement is explicit. Algorithms take an `Executor`, so launches,
-transfers, and ownership checks remain visible at the call site.
+Vector host/device movement remains explicit. Scalar inputs implement `MVal`:
+an ordinary host value is uploaded only when the consumer needs a device value,
+while `Scalar` is read back only when the consumer needs host control flow.
+Algorithms take an `Executor`, so those conversions, launches, and ownership
+checks happen at a visible execution boundary.
 
 ### Scalar And Length Boundaries
 
-The public API returns scalar results as ordinary host-visible values:
-`reduce` returns its item, truth-valued algorithms return `MFlag`, and indices
-and lengths use `MIndex`. Both aliases use `u32`. Algorithms with
-data-dependent output lengths, such as `copy_where` and `reduce_by_key`, return
-storage whose exact length is already available through `len()`.
+The `MVal<R, T>` trait is the common scalar-value contract. Ordinary `T` and
+`Scalar<R, T>` can be passed to the same input. A consumer calls
+`MVal::into_device` when a kernel needs the value or `MVal::into_host` when
+allocation or host control flow needs it.
 
-These calls are synchronous at the return boundary when a GPU-produced scalar
-or exact output length must be observed. Length-preserving algorithms and
-algorithms writing into caller-provided fixed storage do not need that scalar
-readback. Internally, device scalars and logical extents are propagated between
-GPU stages without intermediate CPU transfers, so a public operation performs
-at most the synchronization required by its return contract. `Executor::to_host`
-remains the explicit boundary for copying result data.
+GPU-produced scalar results use `Scalar<R, T>` and stay on the device until
+a host consumer resolves them or `Scalar::read` is called explicitly.
+`Executor::value` explicitly uploads a host value when callers want to prepare
+or reuse device-resident scalar storage.
+Truth-valued algorithms use `MFlag`, while indices and lengths use `MIndex`.
+Both aliases use `u32`.
+
+Owned device allocations are also bounded by `MIndex`: `Executor::alloc`,
+`Executor::full`, and the storage allocation contract take `MIndex`, not
+`usize`. Consequently every allocated row has a representable index, and a
+full-length index or permutation vector can cover the same domain. A length
+originating as host `usize` must be checked and converted before allocation;
+the conversion to backend byte counts remains an internal implementation
+detail.
+
+Algorithms with data-dependent output lengths, such as `copy_where` and
+`reduce_by_key`, still synchronize when they must allocate an exact-length
+`MVec`. These host-required consumers accept the same `MVal` contract and
+perform the read internally. Length-preserving algorithms and operations
+writing into caller-provided fixed storage do not need that readback.
+`Executor::to_host` remains the explicit boundary for copying vector data.
 
 `MFlag` is the truth representation throughout Massively: zero is false and
 nonzero is true. Predicate producers should use `flag::from_bool` to return a
 canonical flag, while stencils accept any `MFlag` value. Consumers should use
 `flag::is_set`; comparing an arbitrary flag to `1` is incorrect because other
-nonzero values are also true. Device-resident summaries are ordinary
-`MVec<R, MFlag>` values.
+nonzero values are also true. Device-resident scalar summaries use
+`Scalar<R, MFlag>`.
 
 ### Device Storage And Slices
 

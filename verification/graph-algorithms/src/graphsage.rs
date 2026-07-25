@@ -140,7 +140,7 @@ pub fn solve<R: Runtime>(
     assert_eq!(neighbor_weights.len(), weight_count);
     assert_eq!(bias.len(), output_features);
 
-    let neighbor_sum = common::filled(exec, input.len() as usize, 0.0f32)?;
+    let neighbor_sum = common::filled(exec, input.len(), 0.0f32)?;
     if graph.edge_count() != 0 {
         let edge_features = u32::try_from(graph.edge_count())
             .expect("edge count exceeds u32")
@@ -193,7 +193,7 @@ pub fn solve<R: Runtime>(
             exec,
             neighbor_values.slice(..),
             source_indices.slice(..),
-            0.0f32,
+            exec.value(0.0f32)?,
             SumF32,
             neighbor_sum.slice_mut(..),
         )?;
@@ -294,7 +294,7 @@ pub fn solve<R: Runtime>(
     }
 
     let segmentation = Segmentation::from_lengths(exec, lazy::constant(output_features).take(n))?;
-    let norm_squared = ForEachSegment(Reduce(SumF32, 0.0f32)).run(
+    let norm_squared = ForEachSegment(Reduce(SumF32, exec.value(0.0f32)?)).run(
         exec,
         segmentation.segments(lazy::map(output.slice(..), Square))?,
     )?;

@@ -294,7 +294,7 @@ fn zip12_segmented_scans_cross_block_boundaries() {
         device_keys.slice(..),
         lazify(zip12_columns!(device)),
         Equal,
-        zero,
+        exec.value(zero).unwrap(),
         MaxTwelve,
     )
     .unwrap();
@@ -342,13 +342,16 @@ proptest! {
 
         let zero = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         prop_assert_eq!(
-            massively::vector::reduce(
+            read_value(
                 &exec,
-                lazify(zip12_columns!(device)),
-                zero,
-                MaxTwelve,
-            )
-            .unwrap(),
+                massively::vector::reduce(
+                    &exec,
+                    lazify(zip12_columns!(device)),
+                    exec.value(zero).unwrap(),
+                    MaxTwelve,
+                )
+                .unwrap(),
+            ),
             reference::reduce(&input_rows, zero, MaxTwelve),
         );
 
@@ -363,7 +366,7 @@ proptest! {
         let scanned = massively::vector::exclusive_scan(
             &exec,
             lazify(zip12_columns!(device)),
-            zero,
+            exec.value(zero).unwrap(),
             MaxTwelve,
         ).unwrap();
         let expected_rows = reference::exclusive_scan(&input_rows, zero, MaxTwelve);

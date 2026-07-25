@@ -5,7 +5,7 @@ use cubecl::prelude::{CubeType, Runtime};
 use std::ops::RangeBounds;
 
 use crate::core::iter::Zip;
-use crate::{Error, Executor, MIndex};
+use crate::{Error, Executor, MIndex, MVal};
 use crate::{
     output::{ReadOutput, SliceOutput},
     read::SliceExpression,
@@ -41,7 +41,7 @@ pub trait MStorage<R: Runtime>: Sized {
     ///
     /// The storage must be completely written before it is read.
     #[doc(hidden)]
-    fn allocate(exec: &Executor<R>, len: usize) -> Self;
+    fn allocate(exec: &Executor<R>, len: MIndex) -> Self;
 
     /// Returns the number of allocated logical rows.
     ///
@@ -157,7 +157,9 @@ where
 
     fn store_value(exec: &Executor<R>, value: Item) -> Result<Self::Storage, Error> {
         let storage = <Self::Storage as MStorage<R>>::allocate(exec, 1);
-        storage.slice_mut(..).fill_with(exec, value)?;
+        storage
+            .slice_mut(..)
+            .run_output_operation(FillOperation { exec, value })?;
         Ok(storage)
     }
 
@@ -269,10 +271,23 @@ where
 /// Converts an upper-bound allocation into an exactly sized owned result.
 ///
 /// Length-changing kernels may use `storage` as internal scratch while the
-/// produced row count remains on the device. Once that count is read at the
-/// public API boundary, this function either returns the already exact
-/// allocation or copies the initialized prefix into a new exact allocation.
+/// produced row count remains on the device. This function accepts either a
+/// host- or device-resident count, resolves it on the host, then either returns
+/// the already exact allocation or copies the initialized prefix into a new
+/// exact allocation.
 pub(crate) fn into_exact_prefix<R, Item>(
+    exec: &Executor<R>,
+    storage: crate::MVec<R, Item>,
+    len: impl MVal<R, MIndex>,
+) -> Result<crate::MVec<R, Item>, Error>
+where
+    R: Runtime,
+    Item: MAlloc<R>,
+{
+    into_exact_prefix_host::<R, Item>(exec, storage, len.into_host(exec)?)
+}
+
+fn into_exact_prefix_host<R, Item>(
     exec: &Executor<R>,
     mut storage: crate::MVec<R, Item>,
     len: MIndex,
@@ -330,7 +345,7 @@ where
 pub trait MAlloc<R: Runtime>: CubeType + Send + Sync + Sized + 'static {
     /// The owned SoA storage used for this flat row.
     #[doc(hidden)]
-    type Owned: MStorage<R, Item = Self>;
+    type Owned: MStorage<R, Item = Self> + Clone + Send + Sync + 'static;
 
     #[doc(hidden)]
     type Dispatch: ItemDispatch<R, Item = Self, Storage = Self::Owned>;
@@ -460,7 +475,7 @@ struct FillOperation<'a, R: Runtime, Item> {
 
 pub(crate) struct FillValueOperation<'a, R: Runtime, Item: MAlloc<R>> {
     pub(crate) exec: &'a Executor<R>,
-    pub(crate) value: &'a crate::MVal<R, Item>,
+    pub(crate) value: &'a crate::Scalar<R, Item>,
 }
 
 impl<R, Item> OutputOperation<R, Item> for FillOperation<'_, R, Item>
@@ -627,11 +642,6 @@ pub trait MIterMut<R: Runtime>: Sized {
 
     #[doc(hidden)]
     fn lower_output(self) -> Self::LoweredOutput;
-
-    #[doc(hidden)]
-    fn fill_with(self, exec: &Executor<R>, value: Self::Item) -> Result<(), Error> {
-        self.run_output_operation(FillOperation { exec, value })
-    }
 
     #[doc(hidden)]
     #[allow(private_bounds, private_interfaces)]
@@ -1288,7 +1298,8 @@ mod tests {
     #[test]
     fn exact_prefix_reallocates_every_physical_column() {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-        let storage = exec.full(8, (11_u32, 22_u32)).unwrap();
+        let value = exec.value((11_u32, 22_u32)).unwrap();
+        let storage = exec.full(8, value).unwrap();
         let exact = into_exact_prefix::<WgpuRuntime, (u32, u32)>(&exec, storage, 3).unwrap();
 
         assert_eq!(exact.len().unwrap(), 3);
@@ -1307,7 +1318,10 @@ mod tests {
         let keys = crate::read::Transform::new(crate::Counting::new(7, 3), MakeReadOnly);
 
         assert_eq!(
-            crate::vector::is_sorted(&exec, keys, ReadOnlyLess).unwrap(),
+            crate::vector::is_sorted(&exec, keys, ReadOnlyLess)
+                .unwrap()
+                .read(&exec)
+                .unwrap(),
             crate::flag::from_bool(true)
         );
     }
@@ -1401,7 +1415,10 @@ mod tests {
         let right = crate::read::Transform::new(right_values.column(), MakeReadOnlyFromU64);
 
         assert_eq!(
-            crate::vector::equal(&exec, left, right, ReadOnlyEqual).unwrap(),
+            crate::vector::equal(&exec, left, right, ReadOnlyEqual)
+                .unwrap()
+                .read(&exec)
+                .unwrap(),
             crate::flag::from_bool(true)
         );
     }

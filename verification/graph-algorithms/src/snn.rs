@@ -223,7 +223,7 @@ pub fn solve<R: Runtime>(
         )?,
     )?;
     let (core_sources, core_destinations) = MStorage::into_columns(core_edges);
-    let core_weights = common::filled(exec, core_sources.len() as usize, 1u32)?;
+    let core_weights = common::filled(exec, core_sources.len(), 1u32)?;
     let core_graph = common::weighted_csr_from_edges(
         exec,
         n,
@@ -253,7 +253,7 @@ pub fn solve<R: Runtime>(
         exec,
         &similarity_topology,
         adjacent_candidates,
-        u32::MAX,
+        exec.value(u32::MAX)?,
         common::MinU32,
     )?;
     let labels = vector::map(

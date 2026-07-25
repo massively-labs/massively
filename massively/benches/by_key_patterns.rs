@@ -61,7 +61,7 @@ fn bench_by_key_patterns(c: &mut Criterion) {
     let mut exclusive = c.benchmark_group("exclusive_scan_by_key_patterns");
     for &len in common::SIZES {
         let values = exec.to_device(&common::dense_f32(len));
-        let init = 0.0_f32;
+        let init = exec.value(0.0_f32).unwrap();
         for (pattern, host_keys) in key_patterns(len) {
             let keys = exec.to_device(&host_keys);
             exclusive.bench_function(BenchmarkId::new(pattern, len), |b| {
@@ -86,7 +86,7 @@ fn bench_by_key_patterns(c: &mut Criterion) {
     let mut reduce = c.benchmark_group("reduce_by_key_patterns");
     for &len in common::SIZES {
         let values = exec.to_device(&common::dense_f32(len));
-        let init = 0.0_f32;
+        let init = exec.value(0.0_f32).unwrap();
         for (pattern, host_keys) in key_patterns(len) {
             let keys = exec.to_device(&host_keys);
             reduce.bench_function(BenchmarkId::new(pattern, len), |b| {

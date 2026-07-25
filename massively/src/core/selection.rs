@@ -472,12 +472,19 @@ where
 /// Replaces items whose logical stencil is true.
 pub(crate) fn replace_where<R, Stencil, Output>(
     exec: &Executor<R>,
-    value: Output::Item,
+    value: <Output::Item as crate::allocation::ScratchStorage<R>>::Storage,
     stencil: Stencil,
     output: Output,
 ) -> Result<(), Error>
 where
     R: Runtime,
+    crate::read::FixedRead<
+        <<Output::Item as crate::allocation::ScratchStorage<R>>::Storage as RowStorage<R>>::Read,
+    >: GatherInput<
+            R,
+            Constant<u32>,
+            <<Output::Item as crate::allocation::ScratchStorage<R>>::Storage as RowStorage<R>>::Write,
+        >,
     Stencil: FlagInput<R>,
     Output: OutputExpression,
     Output::Item: crate::allocation::ScratchStorage<R>,
@@ -498,7 +505,11 @@ where
     let control = stencil.selected_control(exec)?;
     let replacements =
         <Output::Item as crate::allocation::ScratchStorage<R>>::alloc_scratch(exec, control.len());
-    replacements.write().fill_output(exec, value)?;
+    crate::read::FixedRead::new(value.read()).gather(
+        exec,
+        Constant::new(0, control.len()),
+        replacements.write(),
+    )?;
     crate::indexed::IndexedCopyInput::indexed_copy_selected(
         replacements.read(),
         exec,
@@ -724,7 +735,14 @@ mod tests {
         let output = || Zip::new(Zip::new(a.slice_mut(..), b.slice_mut(..)), c.slice_mut(..));
         fill(&exec, (7_u32, 2.5_f32, -3_i32), output()).unwrap();
         let flags = exec.to_device(&[0_u32, 1, 0, 1]);
-        replace_where(&exec, (9_u32, 4.5_f32, -8_i32), flags.column(), output()).unwrap();
+        let value = exec.value((9_u32, 4.5_f32, -8_i32)).unwrap();
+        replace_where(
+            &exec,
+            value.into_scratch_storage(),
+            flags.column(),
+            output(),
+        )
+        .unwrap();
         assert_eq!(exec.to_host(&a).unwrap(), vec![7, 9, 7, 9]);
         assert_eq!(exec.to_host(&b).unwrap(), vec![2.5, 4.5, 2.5, 4.5]);
         assert_eq!(exec.to_host(&c).unwrap(), vec![-3, -8, -3, -8]);

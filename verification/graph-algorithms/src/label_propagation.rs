@@ -93,6 +93,7 @@ pub fn solve<R: Runtime>(
         u32::try_from(graph.edge_count()).map_err(|_| massively::Error::LengthTooLarge {
             len: graph.edge_count(),
         })?;
+    let zero = exec.value(0u32)?;
 
     for _ in 0..max_iterations {
         let neighbor_labels = vector::gather(
@@ -109,7 +110,7 @@ pub fn solve<R: Runtime>(
                 sorted_pairs.slice(..),
                 lazy::constant(1u32).take(edge_count),
                 PairEqual,
-                0u32,
+                zero.clone(),
                 SumU32,
             )?,
         )?;
@@ -141,7 +142,7 @@ pub fn solve<R: Runtime>(
             common::counting_u32(0, n as usize),
             candidate_sources.slice_mut(pair_count..),
         )?;
-        vector::fill(exec, 0u32, candidate_counts.slice_mut(pair_count..))?;
+        vector::fill(exec, zero.clone(), candidate_counts.slice_mut(pair_count..))?;
         vector::copy(
             exec,
             labels.slice(..),
@@ -166,9 +167,10 @@ pub fn solve<R: Runtime>(
         let changed = vector::reduce(
             exec,
             lazy::map(zip2(labels.slice(..), next.slice(..)), Changed),
-            0u32,
+            exec.value(0u32)?,
             SumU32,
-        )?;
+        )?
+        .read(exec)?;
         labels = next;
         if changed == 0 {
             break;

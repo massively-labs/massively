@@ -105,11 +105,11 @@ pub fn solve<R: Runtime>(
     graph: &DeviceCsr<R>,
 ) -> common::Result<DeviceVec<R, f32>> {
     let n = graph.vertex_count();
-    let centrality = common::filled(exec, n as usize, 0.0f32)?;
+    let centrality = common::filled(exec, n, 0.0f32)?;
 
     for source in 0..n {
         let distance = bfs::solve(exec, graph, source)?;
-        let paths = common::filled(exec, n as usize, 0.0f32)?;
+        let paths = common::filled(exec, n, 0.0f32)?;
         vector::scatter(
             exec,
             lazy::constant(1.0f32).take(1),
@@ -119,6 +119,7 @@ pub fn solve<R: Runtime>(
 
         let mut max_depth = 0u32;
         let zero = 0.0f32;
+        let zero_value = exec.value(zero)?;
         for depth in 0..n {
             let frontier = vertices_at_depth(exec, &distance, depth)?;
             if frontier.len() == 0 {
@@ -138,13 +139,13 @@ pub fn solve<R: Runtime>(
                 exec,
                 contributions,
                 edges.destinations().slice(..),
-                zero,
+                zero_value.clone(),
                 SumF32,
                 paths.slice_mut(..),
             )?;
         }
 
-        let dependency = common::filled(exec, n as usize, 0.0f32)?;
+        let dependency = common::filled(exec, n, 0.0f32)?;
         for depth in (0..=max_depth).rev() {
             let frontier = vertices_at_depth(exec, &distance, depth)?;
             let edges = common::expand_rows(exec, graph, frontier.slice(..))?;
@@ -158,7 +159,7 @@ pub fn solve<R: Runtime>(
                 ),
                 DependencyContribution,
             );
-            let values = ForEachSegment(Reduce(SumF32, zero))
+            let values = ForEachSegment(Reduce(SumF32, zero_value.clone()))
                 .run(exec, edges.segmentation().segments(contributions)?)?;
             vector::scatter(
                 exec,

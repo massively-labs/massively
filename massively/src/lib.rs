@@ -36,6 +36,8 @@
 //! - [`DeviceVec`], [`DeviceSlice`], and [`DeviceSliceMut`] are the owning and borrowed device
 //!   containers used at API boundaries.
 //! - [`MIter`] and [`MIterMut`] are the public iterator capabilities accepted by algorithms.
+//! - [`MVal`] is the common host/device value contract, implemented by ordinary host values and
+//!   [`Scalar`].
 //! - [`zip2`] through [`zip12`] combine columns into native flat row tuples.
 //! - [`lazy`] provides allocation-free sources and adapters.
 //! - [`op`] contains reusable GPU operations such as [`op::Identity`].
@@ -43,14 +45,12 @@
 //!
 //! # Synchronization model
 //!
-//! Scalar-returning algorithms expose ordinary host values, and
-//! data-dependent sequence algorithms return exactly allocated owned storage.
-//! Such functions may synchronize once at their return boundary to determine
-//! the allocation size. Reading a public vector or iterator length never
-//! synchronizes. Length-preserving operations and operations writing into
-//! preallocated fixed storage do not read a scalar back. Device scalars and
-//! active-prefix extents remain private scratch metadata and are propagated
-//! between internal GPU stages without intermediate synchronization.
+//! Scalar-returning algorithms produce [`Scalar`] without reading the result back. Value
+//! consumers resolve any [`MVal`] to the representation they need; resolving a `Scalar` on
+//! the host is a synchronization boundary.
+//! Data-dependent sequence algorithms still synchronize when exact allocation
+//! requires a GPU-produced length. Reading a public vector or iterator length
+//! never synchronizes.
 
 mod api;
 mod core;
@@ -58,9 +58,9 @@ pub mod flag;
 pub mod seg;
 pub mod vector;
 
-// Crate-private compatibility aliases keep the kernel core independent from
-// the public module layout. They are not part of the external API.
-pub(crate) use api::value::MVal;
+// Compatibility aliases keep the kernel core independent from the public
+// module layout.
+pub use api::value::{MVal, Scalar};
 pub(crate) use core::allocation::{RowAlloc, RowStorage};
 pub(crate) use core::arity::{A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13};
 pub(crate) use core::iter::Zip;
@@ -102,7 +102,7 @@ pub use api::{Error, lazy, op, util};
 pub mod prelude {
     pub use crate::{
         DeviceSlice, DeviceSliceMut, DeviceVec, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut,
-        MStorage, MVec, RadixKey, flag, op, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10,
-        zip11, zip12,
+        MStorage, MVal, MVec, RadixKey, Scalar, flag, op, zip2, zip3, zip4, zip5, zip6, zip7, zip8,
+        zip9, zip10, zip11, zip12,
     };
 }

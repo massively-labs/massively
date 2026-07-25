@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Owned storage that can produce read and mutable output trees.
-pub trait RowStorage<R: Runtime> {
+pub trait RowStorage<R: Runtime>: Clone + Send + Sync + 'static {
     type Item: StorageLayout;
     type ReadSlots: SlotEnvironment + crate::read::PaddedReadSlots;
     type WriteSlots: PaddedOutputSlots<Leaves = <Self::Item as StorageLayout>::StorageLeaves>;
@@ -692,8 +692,8 @@ where
     type Slice<'a> = crate::DeviceSlice<T>;
     type SliceMut<'a> = DeviceSliceMut<T>;
 
-    fn allocate(exec: &Executor<R>, len: usize) -> Self {
-        exec.alloc_column::<T>(len)
+    fn allocate(exec: &Executor<R>, len: crate::MIndex) -> Self {
+        exec.alloc_column::<T>(len as usize)
     }
 
     fn capacity(&self) -> Result<crate::MIndex, Error> {
@@ -757,7 +757,7 @@ where
     where
         Self: 'a;
 
-    fn allocate(exec: &Executor<R>, len: usize) -> Self {
+    fn allocate(exec: &Executor<R>, len: crate::MIndex) -> Self {
         Zip::new(Left::allocate(exec, len), Right::allocate(exec, len))
     }
 
@@ -803,7 +803,9 @@ where
 impl<R: Runtime> Executor<R> {
     /// Allocates uninitialized device storage for `len` flat rows.
     ///
-    /// `len` uses [`crate::MIndex`], matching iterator lengths and index-based algorithms.
+    /// `len` is an [`crate::MIndex`] so every allocated row has a representable
+    /// index and a full-length index or permutation vector can always be
+    /// allocated alongside it.
     ///
     /// The storage must be completely written before it is read.
     ///
@@ -826,8 +828,19 @@ impl<R: Runtime> Executor<R> {
     ///
     /// assert_eq!(exec.to_host(&output).unwrap(), vec![7, 7, 7, 7]);
     /// ```
+    ///
+    /// A host-sized length must be checked and converted explicitly:
+    ///
+    /// ```compile_fail
+    /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
+    /// use massively::Executor;
+    ///
+    /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    /// let host_len: usize = 4;
+    /// let _ = exec.alloc::<u32>(host_len);
+    /// ```
     pub fn alloc<Item: MAlloc<R>>(&self, len: crate::MIndex) -> crate::MVec<R, Item> {
-        <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len as usize)
+        <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len)
     }
 
     pub(crate) fn alloc_row<Item: RowAlloc<R>>(
@@ -839,7 +852,7 @@ impl<R: Runtime> Executor<R> {
 
     /// Allocates storage and fills every logical item with `value`.
     ///
-    /// `len` uses [`crate::MIndex`], matching iterator lengths and index-based algorithms.
+    /// Like [`Self::alloc`], `len` is an [`crate::MIndex`].
     ///
     /// # Examples
     ///
@@ -852,18 +865,22 @@ impl<R: Runtime> Executor<R> {
     ///
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![42, 42, 42]);
     /// ```
-    pub fn full<Item>(&self, len: crate::MIndex, value: Item) -> Result<crate::MVec<R, Item>, Error>
+    pub fn full<Item>(
+        &self,
+        len: crate::MIndex,
+        value: impl crate::MVal<R, Item>,
+    ) -> Result<crate::MVec<R, Item>, Error>
     where
         Item: MAlloc<R>,
     {
-        let value = self.value(value)?;
-        self.full_value(len as usize, &value)
+        let value = value.into_device(self)?;
+        self.full_value(len, &value)
     }
 
     pub(crate) fn full_value<Item>(
         &self,
-        len: usize,
-        value: &crate::MVal<R, Item>,
+        len: crate::MIndex,
+        value: &crate::Scalar<R, Item>,
     ) -> Result<crate::MVec<R, Item>, Error>
     where
         Item: MAlloc<R>,
@@ -941,7 +958,8 @@ mod tests {
     #[test]
     fn full_writes_and_exposes_flat_columns() {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-        let storage = exec.full::<FlatRow3>(2, (7, 3.5, -2)).unwrap();
+        let value = exec.value((7, 3.5, -2)).unwrap();
+        let storage = exec.full::<FlatRow3>(2, value).unwrap();
         let (a, b, c) = storage.into_columns();
 
         assert_eq!(exec.to_host(&a).unwrap(), vec![7, 7]);

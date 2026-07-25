@@ -61,7 +61,7 @@ fn normalize<R: Runtime>(
     exec: &Executor<R>,
     values: DeviceVec<R, f32>,
 ) -> common::Result<DeviceVec<R, f32>> {
-    let sum = vector::reduce(exec, values.slice(..), 0.0, SumF32)?;
+    let sum = vector::reduce(exec, values.slice(..), exec.value(0.0)?, SumF32)?.read(exec)?;
     if sum == 0.0 {
         return Ok(values);
     }
@@ -83,30 +83,32 @@ pub fn solve<R: Runtime>(
     let n = graph.vertex_count();
     assert!(n != 0);
     let initial = 1.0 / n as f32;
-    let mut hubs = common::filled(exec, n as usize, initial)?;
-    let mut authorities = common::filled(exec, n as usize, initial)?;
+    let mut hubs = common::filled(exec, n, initial)?;
+    let mut authorities = common::filled(exec, n, initial)?;
     if graph.edge_count() == 0 {
         return Ok((hubs, authorities));
     }
 
     let out_degree = common::resident_degrees(exec, graph)?;
-    let in_degree = common::filled(exec, n as usize, 0u32)?;
+    let in_degree = common::filled(exec, n, 0u32)?;
     let edge_count =
         u32::try_from(graph.edge_count()).map_err(|_| massively::Error::LengthTooLarge {
             len: graph.edge_count(),
         })?;
+    let zero_u32 = exec.value(0u32)?;
+    let zero_f32 = exec.value(0.0f32)?;
     vector::scatter_reduce(
         exec,
         lazy::constant(1u32).take(edge_count),
         graph.destinations().slice(..),
-        0u32,
+        zero_u32,
         SumU32,
         in_degree.slice_mut(..),
     )?;
     let sources = graph.segmentation().segment_ids(exec)?;
 
     for _ in 0..iterations {
-        authorities = common::filled(exec, n as usize, 0.0f32)?;
+        authorities = common::filled(exec, n, 0.0f32)?;
         let hub_shares = lazy::map(
             zip2(
                 lazy::permute(hubs.slice(..), sources.slice(..)),
@@ -118,7 +120,7 @@ pub fn solve<R: Runtime>(
             exec,
             hub_shares,
             graph.destinations().slice(..),
-            0.0,
+            zero_f32.clone(),
             SumF32,
             authorities.slice_mut(..),
         )?;
@@ -131,7 +133,7 @@ pub fn solve<R: Runtime>(
             ),
             DivideByDegree,
         );
-        hubs = common::reduce_rows(exec, graph, authority_shares, 0.0f32, SumF32)?;
+        hubs = common::reduce_rows(exec, graph, authority_shares, zero_f32.clone(), SumF32)?;
         hubs = normalize(exec, hubs)?;
     }
 

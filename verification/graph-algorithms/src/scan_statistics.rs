@@ -82,7 +82,13 @@ pub fn solve<R: Runtime>(
         ),
         IntersectCount,
     )?;
-    let incident = common::reduce_rows(exec, graph, common_neighbors.slice(..), 0u32, SumU32)?;
+    let incident = common::reduce_rows(
+        exec,
+        graph,
+        common_neighbors.slice(..),
+        exec.value(0u32)?,
+        SumU32,
+    )?;
     vector::map(exec, zip2(degree.slice(..), incident.slice(..)), AddU32)
 }
 

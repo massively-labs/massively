@@ -162,7 +162,7 @@ pub fn solve_with_choices<R: Runtime>(
         ),
         WalkerStart,
     )?;
-    let paths = common::filled(exec, path_count as usize, u32::MAX)?;
+    let paths = common::filled(exec, path_count, u32::MAX)?;
     let degrees = common::resident_degrees(exec, graph)?;
 
     for step in 0..walk_length {
@@ -212,7 +212,7 @@ pub fn solve_with_choices<R: Runtime>(
                 common::stencil(live_stencil.slice(..)),
             )?,
         )?;
-        let next = common::filled(exec, walker_count as usize, u32::MAX)?;
+        let next = common::filled(exec, walker_count, u32::MAX)?;
         if live_indices.len() != 0 {
             let live_positions = vector::gather(
                 exec,
