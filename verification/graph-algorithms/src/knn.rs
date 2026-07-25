@@ -45,9 +45,13 @@ impl<R: Runtime> KnnGraph<R> {
     }
 
     pub fn topology(&self, exec: &Executor<R>) -> common::Result<DeviceCsr<R>> {
-        let offsets = exec.alloc::<u32>(self.vertex_count() as usize + 1);
+        let offsets = exec.alloc::<u32>(
+            self.vertex_count()
+                .checked_add(1)
+                .expect("offset count exceeds MIndex"),
+        );
         vector::copy(exec, self.offsets(), offsets.slice_mut(..))?;
-        let destinations = exec.alloc::<u32>(self.edge_count() as usize);
+        let destinations = exec.alloc::<u32>(self.edge_count());
         vector::copy(
             exec,
             self.destinations.slice(..),

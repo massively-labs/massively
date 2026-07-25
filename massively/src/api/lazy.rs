@@ -10,7 +10,7 @@ use std::ops::RangeBounds;
 
 use cubecl::prelude::Runtime;
 
-use crate::{Error, MIndex, MIter, MStorageElement, op::UnaryOp};
+use crate::{Error, MIndex, MIter, MStorageElement, op::ReductionOp, op::UnaryOp};
 use crate::{core::facade as private, read::SliceExpression};
 
 pub use crate::core::read::Taken;
@@ -121,7 +121,7 @@ where
     Values: MIter<R>,
     Indices: MIter<R, Item = MIndex>,
     crate::read::Permute<Values::Read, Indices::Read>:
-        private::KernelInput<R, Item = Values::Item> + private::IterLength + SliceExpression,
+        private::KernelInput<R, Item = Values::Item> + SliceExpression,
 {
     type Item = Values::Item;
     type Read = crate::read::Permute<Values::Read, Indices::Read>;
@@ -132,9 +132,9 @@ where
         Bounds: RangeBounds<MIndex>,
     {
         let input = self.clone().lower_read();
-        let len = private::IterLength::logical_len(&input)
+        let len = private::logical_len::<R, _>(&input)
             .expect("cannot slice a lazy permutation with an invalid length");
-        let (start, count) = crate::api::iter::resolve_iter_range(len, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
@@ -169,7 +169,7 @@ where
     R: Runtime,
     Values: MIter<R>,
     crate::read::Reverse<Values::Read>:
-        private::KernelInput<R, Item = Values::Item> + private::IterLength + SliceExpression,
+        private::KernelInput<R, Item = Values::Item> + SliceExpression,
 {
     type Item = Values::Item;
     type Read = crate::read::Reverse<Values::Read>;
@@ -180,9 +180,9 @@ where
         Bounds: RangeBounds<MIndex>,
     {
         let input = self.clone().lower_read();
-        let len = private::IterLength::logical_len(&input)
+        let len = private::logical_len::<R, _>(&input)
             .expect("cannot slice a lazy reverse view with an invalid length");
-        let (start, count) = crate::api::iter::resolve_iter_range(len, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
@@ -196,6 +196,260 @@ where
 
     fn lower_read(self) -> Self::Read {
         crate::read::Reverse::new(self.values.lower_read())
+    }
+}
+
+/// Repeats each input item a fixed number of times without materializing it.
+#[derive(Clone, Copy, Debug)]
+pub struct RepeatEach<Values> {
+    values: Values,
+    repeats: MIndex,
+}
+
+impl<Values> RepeatEach<Values> {
+    pub const fn new(values: Values, repeats: MIndex) -> Self {
+        Self { values, repeats }
+    }
+
+    /// Returns the repeated input.
+    pub const fn values(&self) -> &Values {
+        &self.values
+    }
+
+    /// Returns the repetition count per input item.
+    pub const fn repeats(&self) -> MIndex {
+        self.repeats
+    }
+
+    /// Decomposes this adapter into its input and repetition count.
+    pub fn into_parts(self) -> (Values, MIndex) {
+        (self.values, self.repeats)
+    }
+
+    fn output_len<R>(&self) -> Result<MIndex, Error>
+    where
+        R: Runtime,
+        Values: MIter<R>,
+    {
+        repeated_len(self.values.len()?, self.repeats)
+    }
+}
+
+#[doc(hidden)]
+impl<R, Values> MIter<R> for RepeatEach<Values>
+where
+    R: Runtime,
+    Values: MIter<R>,
+    crate::read::Permute<Values::Read, crate::read::DivModCounting>:
+        private::KernelInput<R, Item = Values::Item> + SliceExpression,
+{
+    type Item = Values::Item;
+    type Read = crate::read::Permute<Values::Read, crate::read::DivModCounting>;
+    type Slice = crate::read::Slice<R, Self::Read>;
+
+    fn slice<Bounds>(&self, range: Bounds) -> Self::Slice
+    where
+        Bounds: RangeBounds<MIndex>,
+    {
+        let input = self.clone().lower_read();
+        let len = private::logical_len::<R, _>(&input)
+            .expect("cannot slice lazy repeat_each with an invalid length");
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
+        crate::read::Slice::new(input.slice_expression(start, count))
+    }
+
+    fn capacity(&self) -> Result<MIndex, Error> {
+        self.output_len::<R>()
+    }
+
+    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
+        Ok(crate::extent::LogicalExtent::fixed(
+            self.output_len::<R>()? as usize
+        ))
+    }
+
+    fn lower_read(self) -> Self::Read {
+        let input_len = self
+            .values
+            .len()
+            .expect("lazy repeat_each input must have a host-visible length");
+        let output_len =
+            repeated_len(input_len, self.repeats).expect("lazy repeat_each length overflow");
+        let indices = crate::read::DivModCounting::new(
+            0,
+            self.repeats.max(1),
+            input_len.max(1),
+            output_len as usize,
+        );
+        crate::read::Permute::new(self.values.lower_read(), indices)
+    }
+}
+
+/// Repeats the entire input a fixed number of times without materializing it.
+#[derive(Clone, Copy, Debug)]
+pub struct Tile<Values> {
+    values: Values,
+    repeats: MIndex,
+}
+
+impl<Values> Tile<Values> {
+    pub const fn new(values: Values, repeats: MIndex) -> Self {
+        Self { values, repeats }
+    }
+
+    /// Returns the tiled input.
+    pub const fn values(&self) -> &Values {
+        &self.values
+    }
+
+    /// Returns the number of complete input repetitions.
+    pub const fn repeats(&self) -> MIndex {
+        self.repeats
+    }
+
+    /// Decomposes this adapter into its input and repetition count.
+    pub fn into_parts(self) -> (Values, MIndex) {
+        (self.values, self.repeats)
+    }
+
+    fn output_len<R>(&self) -> Result<MIndex, Error>
+    where
+        R: Runtime,
+        Values: MIter<R>,
+    {
+        repeated_len(self.values.len()?, self.repeats)
+    }
+}
+
+#[doc(hidden)]
+impl<R, Values> MIter<R> for Tile<Values>
+where
+    R: Runtime,
+    Values: MIter<R>,
+    crate::read::Permute<Values::Read, crate::read::DivModCounting>:
+        private::KernelInput<R, Item = Values::Item> + SliceExpression,
+{
+    type Item = Values::Item;
+    type Read = crate::read::Permute<Values::Read, crate::read::DivModCounting>;
+    type Slice = crate::read::Slice<R, Self::Read>;
+
+    fn slice<Bounds>(&self, range: Bounds) -> Self::Slice
+    where
+        Bounds: RangeBounds<MIndex>,
+    {
+        let input = self.clone().lower_read();
+        let len = private::logical_len::<R, _>(&input)
+            .expect("cannot slice lazy tile with an invalid length");
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
+        crate::read::Slice::new(input.slice_expression(start, count))
+    }
+
+    fn capacity(&self) -> Result<MIndex, Error> {
+        self.output_len::<R>()
+    }
+
+    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
+        Ok(crate::extent::LogicalExtent::fixed(
+            self.output_len::<R>()? as usize
+        ))
+    }
+
+    fn lower_read(self) -> Self::Read {
+        let input_len = self
+            .values
+            .len()
+            .expect("lazy tile input must have a host-visible length");
+        let output_len = repeated_len(input_len, self.repeats).expect("lazy tile length overflow");
+        let indices = crate::read::DivModCounting::new(0, 1, input_len.max(1), output_len as usize);
+        crate::read::Permute::new(self.values.lower_read(), indices)
+    }
+}
+
+fn repeated_len(input_len: MIndex, repeats: MIndex) -> Result<MIndex, Error> {
+    let len = (input_len as usize)
+        .checked_mul(repeats as usize)
+        .ok_or(Error::LengthTooLarge { len: usize::MAX })?;
+    MIndex::try_from(len).map_err(|_| Error::LengthTooLarge { len })
+}
+
+/// Lazily combines each item with its predecessor, preserving the first item.
+#[derive(Debug)]
+pub struct AdjacentDifference<Input, Op> {
+    input: Input,
+    _op: PhantomData<fn() -> Op>,
+}
+
+impl<Input: Clone, Op> Clone for AdjacentDifference<Input, Op> {
+    fn clone(&self) -> Self {
+        Self {
+            input: self.input.clone(),
+            _op: PhantomData,
+        }
+    }
+}
+
+impl<Input: Copy, Op> Copy for AdjacentDifference<Input, Op> {}
+
+impl<Input, Op> AdjacentDifference<Input, Op> {
+    pub fn new(input: Input, _op: Op) -> Self {
+        Self {
+            input,
+            _op: PhantomData,
+        }
+    }
+
+    /// Returns the input iterator.
+    pub const fn input(&self) -> &Input {
+        &self.input
+    }
+
+    /// Returns the input iterator.
+    pub fn into_inner(self) -> Input {
+        self.input
+    }
+}
+
+#[doc(hidden)]
+impl<R, Input, Op> MIter<R> for AdjacentDifference<Input, Op>
+where
+    R: Runtime,
+    Input: MIter<R>,
+    Op: ReductionOp<Input::Item>,
+    crate::read::Permute<crate::read::Adjacent<Input::Read, Op>, crate::read::Counting>:
+        private::KernelInput<R, Item = Input::Item> + SliceExpression,
+{
+    type Item = Input::Item;
+    type Read = crate::read::Permute<crate::read::Adjacent<Input::Read, Op>, crate::read::Counting>;
+    type Slice = crate::read::Slice<R, Self::Read>;
+
+    fn slice<Bounds>(&self, range: Bounds) -> Self::Slice
+    where
+        Bounds: RangeBounds<MIndex>,
+    {
+        let input = self.clone().lower_read();
+        let len = private::logical_len::<R, _>(&input)
+            .expect("cannot slice lazy adjacent_difference with an invalid length");
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
+        crate::read::Slice::new(input.slice_expression(start, count))
+    }
+
+    fn capacity(&self) -> Result<MIndex, Error> {
+        self.input.capacity()
+    }
+
+    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
+        self.input.logical_extent()
+    }
+
+    fn lower_read(self) -> Self::Read {
+        let len = self
+            .input
+            .len()
+            .expect("lazy adjacent_difference input must have a host-visible length");
+        crate::read::Permute::new(
+            crate::read::Adjacent::from_input(self.input.lower_read()),
+            crate::read::Counting::new(0, len as usize),
+        )
     }
 }
 
@@ -233,7 +487,7 @@ where
     Input: MIter<R>,
     Op: UnaryOp<Input::Item>,
     crate::read::Transform<Input::Read, Op>:
-        private::KernelInput<R, Item = Op::Output> + private::IterLength + SliceExpression,
+        private::KernelInput<R, Item = Op::Output> + SliceExpression,
 {
     type Item = Op::Output;
     type Read = crate::read::Transform<Input::Read, Op>;
@@ -244,9 +498,9 @@ where
         Bounds: RangeBounds<MIndex>,
     {
         let input = self.clone().lower_read();
-        let len = private::IterLength::logical_len(&input)
+        let len = private::logical_len::<R, _>(&input)
             .expect("cannot slice a lazy map with an invalid length");
-        let (start, count) = crate::api::iter::resolve_iter_range(len, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
@@ -520,6 +774,87 @@ pub fn permute<Values, Indices>(values: Values, indices: Indices) -> Permute<Val
 /// ```
 pub fn reverse<Values>(values: Values) -> Reverse<Values> {
     Reverse::new(values)
+}
+
+/// Lazily repeats every input item `repeats` times.
+///
+/// `repeat_each([a, b], 3)` produces `[a, a, a, b, b, b]`. A zero
+/// repetition count or an empty input produces an empty iterator.
+///
+/// # Examples
+///
+/// ```
+/// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
+/// use massively::{Executor, lazy, op, vector::map};
+///
+/// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+/// let input = exec.to_device(&[10_u32, 20]);
+/// let output = map(
+///     &exec,
+///     lazy::repeat_each(input.slice(..), 3),
+///     op::Identity,
+/// ).unwrap();
+///
+/// assert_eq!(exec.to_host(&output).unwrap(), vec![10, 10, 10, 20, 20, 20]);
+/// ```
+pub fn repeat_each<Values>(values: Values, repeats: MIndex) -> RepeatEach<Values> {
+    RepeatEach::new(values, repeats)
+}
+
+/// Lazily repeats the complete input `repeats` times.
+///
+/// `tile([a, b], 3)` produces `[a, b, a, b, a, b]`. A zero repetition
+/// count or an empty input produces an empty iterator.
+///
+/// # Examples
+///
+/// ```
+/// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
+/// use massively::{Executor, lazy, op, vector::map};
+///
+/// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+/// let input = exec.to_device(&[10_u32, 20]);
+/// let output = map(&exec, lazy::tile(input.slice(..), 3), op::Identity).unwrap();
+///
+/// assert_eq!(exec.to_host(&output).unwrap(), vec![10, 20, 10, 20, 10, 20]);
+/// ```
+pub fn tile<Values>(values: Values, repeats: MIndex) -> Tile<Values> {
+    Tile::new(values, repeats)
+}
+
+/// Lazily combines adjacent input items with `op`.
+///
+/// The first item is preserved. Each later item is `op(previous, current)`.
+/// No intermediate value buffer is allocated.
+///
+/// # Examples
+///
+/// ```
+/// use cubecl::prelude::*;
+/// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
+/// use massively::{Executor, lazy, op, vector::map};
+///
+/// struct Difference;
+///
+/// #[cubecl::cube]
+/// impl op::ReductionOp<u32> for Difference {
+///     fn apply(previous: u32, current: u32) -> u32 {
+///         current - previous
+///     }
+/// }
+///
+/// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+/// let input = exec.to_device(&[3_u32, 8, 10]);
+/// let output = map(
+///     &exec,
+///     lazy::adjacent_difference(input.slice(..), Difference),
+///     op::Identity,
+/// ).unwrap();
+///
+/// assert_eq!(exec.to_host(&output).unwrap(), vec![3, 5, 2]);
+/// ```
+pub fn adjacent_difference<Input, Op>(input: Input, op: Op) -> AdjacentDifference<Input, Op> {
+    AdjacentDifference::new(input, op)
 }
 
 /// Wraps an input in a lazy identity map.

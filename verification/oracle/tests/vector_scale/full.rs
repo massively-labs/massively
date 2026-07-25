@@ -375,7 +375,7 @@ scale_test!(scale_fill, {
     let input = scale_input();
     let exec = exec();
     let mut expected = input.clone();
-    let output = exec.alloc::<u32>(input.len());
+    let output = exec.alloc::<u32>(input.len().try_into().unwrap());
     let value = 123_u32;
     massively::vector::fill(&exec, value, output.slice_mut(..)).unwrap();
     reference::fill(123, &mut expected);

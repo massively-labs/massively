@@ -1,8 +1,9 @@
 use cubecl::prelude::*;
+use std::ops::RangeBounds;
 
 use crate::{DeviceSlice, DeviceVec, Error, Executor, MIndex, MIter};
 
-use super::SegmentIterator;
+use super::{ExclusiveScan, Executable, ForEachSegment, SegmentIterator};
 
 const BLOCK_SIZE: u32 = 256;
 
@@ -95,9 +96,10 @@ fn checked_offset_count(segment_count: usize) -> Result<usize, Error> {
 /// later methods can rely on its invariants.
 ///
 /// Constructors may synchronize once to observe validation status and the
-/// exact flat value count. Once constructed, [`lengths`](Self::lengths) and
-/// [`segment_ids`](Self::segment_ids) only enqueue fixed-shape GPU work; they do
-/// not observe a value on the host.
+/// exact flat value count. Once constructed, [`lengths`](Self::lengths),
+/// [`segment_ids`](Self::segment_ids), and
+/// [`local_indices`](Self::local_indices) only enqueue fixed-shape GPU work;
+/// they do not observe a value on the host.
 ///
 /// Per-segment context needs no dedicated adapter: derive segment IDs, use
 /// [`crate::lazy::permute`] to broadcast the context to flat entries, combine
@@ -123,6 +125,10 @@ fn checked_offset_count(segment_count: usize) -> Result<usize, Error> {
 ///     exec.to_host(&segmentation.segment_ids(&exec).unwrap()).unwrap(),
 ///     vec![0, 1, 1, 2, 2, 2],
 /// );
+/// assert_eq!(
+///     exec.to_host(&segmentation.local_indices(&exec).unwrap()).unwrap(),
+///     vec![0, 0, 1, 0, 1, 2],
+/// );
 /// ```
 pub struct Segmentation<R: Runtime> {
     offsets: DeviceVec<R, MIndex>,
@@ -138,7 +144,44 @@ impl<R: Runtime> Clone for Segmentation<R> {
     }
 }
 
+#[allow(private_interfaces)]
+impl<R: Runtime> MIter<R> for Segmentation<R> {
+    type Item = MIndex;
+    type Read = <DeviceSlice<MIndex> as MIter<R>>::Read;
+    type Slice = DeviceSlice<MIndex>;
+
+    fn slice<Bounds>(&self, range: Bounds) -> Self::Slice
+    where
+        Bounds: RangeBounds<MIndex>,
+    {
+        self.offsets.slice(range)
+    }
+
+    fn capacity(&self) -> Result<MIndex, Error> {
+        Ok(self.offsets.len())
+    }
+
+    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
+        <DeviceSlice<MIndex> as MIter<R>>::logical_extent(&self.offsets.slice(..))
+    }
+
+    fn lower_read(self) -> Self::Read {
+        <DeviceSlice<MIndex> as MIter<R>>::lower_read(self.offsets.slice(..))
+    }
+}
+
 impl<R: Runtime> Segmentation<R> {
+    pub(crate) fn from_generated_offsets(
+        offsets: DeviceVec<R, MIndex>,
+        value_count: MIndex,
+    ) -> Result<Self, Error> {
+        super::segment_count(offsets.len() as usize)?;
+        Ok(Self {
+            offsets,
+            value_count,
+        })
+    }
+
     /// Builds a segmentation from CSR-style offsets.
     ///
     /// Offsets must be nonempty, start at zero, and be nondecreasing. The last
@@ -192,7 +235,8 @@ impl<R: Runtime> Segmentation<R> {
         }
 
         let prefix = crate::vector::inclusive_scan(exec, lengths, super::control::SumU32)?;
-        let offsets = exec.alloc::<u32>(offset_count);
+        let offsets =
+            exec.alloc::<u32>(MIndex::try_from(offset_count).expect("offset count was validated"));
         let status = exec.to_device(&[0u32, 0u32]);
         unsafe {
             offsets_from_prefix_kernel::launch_unchecked::<R>(
@@ -259,7 +303,10 @@ impl<R: Runtime> Segmentation<R> {
         }
 
         let offsets = if value_count == 0 {
-            exec.full(offset_count, 0u32)?
+            exec.full(
+                MIndex::try_from(offset_count).expect("offset count was validated"),
+                0u32,
+            )?
         } else {
             crate::vector::lower_bound(
                 exec,
@@ -294,13 +341,15 @@ impl<R: Runtime> Segmentation<R> {
         if exec.id() != self.offsets.owner {
             return Err(Error::ForeignExecutor);
         }
-        let segment_count = self.segment_count() as usize;
+        let segment_count = self.segment_count();
         let lengths = exec.alloc::<u32>(segment_count);
         if segment_count != 0 {
             unsafe {
                 lengths_from_offsets_kernel::launch_unchecked::<R>(
                     exec.client(),
-                    crate::launch::cube_count_1d(segment_count.div_ceil(BLOCK_SIZE as usize))?,
+                    crate::launch::cube_count_1d(
+                        (segment_count as usize).div_ceil(BLOCK_SIZE as usize),
+                    )?,
                     CubeDim::new_1d(BLOCK_SIZE),
                     BufferArg::from_raw_parts(self.offsets.handle.clone(), self.offsets.capacity()),
                     BufferArg::from_raw_parts(lengths.handle.clone(), lengths.capacity()),
@@ -317,7 +366,7 @@ impl<R: Runtime> Segmentation<R> {
         if exec.id() != self.offsets.owner {
             return Err(Error::ForeignExecutor);
         }
-        let value_count = self.value_count as usize;
+        let value_count = self.value_count;
         let ids = exec.alloc::<u32>(value_count);
         if value_count == 0 {
             return Ok(ids);
@@ -345,13 +394,24 @@ impl<R: Runtime> Segmentation<R> {
         Ok(ids)
     }
 
+    /// Materializes each flat item's zero-based index within its segment.
+    ///
+    /// Empty segments produce no item. For offsets `[0, 2, 2, 5]`, this
+    /// returns `[0, 1, 0, 1, 2]`.
+    pub fn local_indices(&self, exec: &Executor<R>) -> Result<crate::MVec<R, MIndex>, Error> {
+        if exec.id() != self.offsets.owner {
+            return Err(Error::ForeignExecutor);
+        }
+        let ones = crate::lazy::constant(1u32).take(self.value_count);
+        let output = ForEachSegment(ExclusiveScan(super::control::SumU32, 0u32))
+            .run(exec, self.segments(ones)?)?;
+        Ok(output.into_parts().0)
+    }
+
     /// Applies this partition to a flat logical iterator.
     ///
     /// The iterator length must equal [`value_count`](Self::value_count).
-    pub fn segments<Values>(
-        &self,
-        values: Values,
-    ) -> Result<SegmentIterator<Values, DeviceSlice<MIndex>>, Error>
+    pub fn segments<Values>(&self, values: Values) -> Result<SegmentIterator<Values, Self>, Error>
     where
         Values: MIter<R>,
     {
@@ -362,6 +422,6 @@ impl<R: Runtime> Segmentation<R> {
                 right: self.value_count as usize,
             });
         }
-        Ok(SegmentIterator::new(values, self.offsets()))
+        Ok(SegmentIterator::new(values, self.clone()))
     }
 }

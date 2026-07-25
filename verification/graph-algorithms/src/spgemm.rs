@@ -51,8 +51,8 @@ pub fn solve<R: Runtime>(
         0,
         SumU32,
     )?;
-    let destinations = exec.alloc::<u32>(capacity as usize);
-    let offsets = exec.alloc::<u32>(n as usize + 1);
+    let destinations = exec.alloc::<u32>(capacity);
+    let offsets = exec.alloc::<u32>(n.checked_add(1).expect("offset count exceeds MIndex"));
     let mut output_len = 0u32;
 
     for vertex in 0..n {
@@ -92,7 +92,7 @@ pub fn solve<R: Runtime>(
         common::indices(lazy::constant(n).take(1)),
         offsets.slice_mut(..),
     )?;
-    let exact_destinations = exec.alloc::<u32>(output_len as usize);
+    let exact_destinations = exec.alloc::<u32>(output_len);
     vector::copy(
         exec,
         destinations.slice(..output_len),

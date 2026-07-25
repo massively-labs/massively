@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "Massively"
+type: software
+authors:
+  - family-names: "Hayakawa"
+    given-names: "Akira"
+    email: "ruby.wktk@gmail.com"
+version: "0.92.0"
+date-released: 2026-07-25
+repository-code: "https://github.com/massively-labs/massively"
+url: "https://crates.io/crates/massively"
+license: MIT
+abstract: "Composable GPU parallel primitives for Rust."
+keywords:
+  - GPU
+  - parallel algorithms
+  - Rust

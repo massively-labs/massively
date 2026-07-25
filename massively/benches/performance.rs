@@ -234,7 +234,7 @@ fn bench_performance(c: &mut Criterion) {
         );
         let flags = exec.to_device(&common::flags(N, 50));
         let reduce_init = 0.0_f32;
-        let output = exec.alloc::<f32>(N);
+        let output = exec.alloc::<f32>(N.try_into().unwrap());
         exec.sync().unwrap();
         benchmark!(
             group,

@@ -1,9 +1,7 @@
 //! Generic stable comparison sort over flat-row SoA storage.
 //!
-//! The first kernel creates stable block-local runs.  Later kernels merge
-//! those runs while carrying the original position beside every key.  Keys
-//! are therefore read and written sequentially after the block phase; the
-//! permutation is retained only for applying the ordering to by-key values.
+//! The first kernel creates stable block-local runs. Later kernels merge
+//! those runs using sequential reads and writes.
 
 use cubecl::prelude::*;
 
@@ -36,27 +34,6 @@ use super::BinaryPredicateOp;
 pub(crate) const BLOCK_ITEMS: usize = 128;
 const BLOCK_SIZE: u32 = BLOCK_ITEMS as u32;
 
-/// The reusable ordering control.  It intentionally owns no key/value payload.
-pub struct OrderingControl<R: Runtime> {
-    permutation: crate::DeviceVec<R, u32>,
-}
-
-impl<R: Runtime> OrderingControl<R> {
-    pub(crate) fn new(permutation: crate::DeviceVec<R, u32>) -> Self {
-        Self { permutation }
-    }
-
-    pub(crate) fn permutation(&self) -> &crate::DeviceVec<R, u32> {
-        &self.permutation
-    }
-}
-
-/// Result of key ordering before payload application.
-pub struct OrderingResult<R: Runtime, Storage> {
-    pub(crate) sorted_keys: Storage,
-    pub(crate) control: OrderingControl<R>,
-}
-
 /// Storage-shape dispatch for the optimized sort.
 ///
 /// This capability lives on the physical leaf list, whose type identifies one
@@ -69,8 +46,7 @@ where
     fn sort_storage<Less>(
         exec: &Executor<R>,
         input: Item::RowStorage,
-        carry_indices: bool,
-    ) -> Result<OrderingResult<R, Item::RowStorage>, Error>
+    ) -> Result<Item::RowStorage, Error>
     where
         Less: BinaryPredicateOp<Item>;
 }
@@ -96,11 +72,9 @@ macro_rules! define_sort_kernels {
             $( $slot: &[$leaf], )+
             read_offsets: &[u32],
             logical_len_buffer: &[u32],
-            #[comptime] carry_indices: bool,
             zero_offsets: &[u32],
             $( $out: &mut [$leaf], )+
             write_offsets: &[u32],
-            output_indices: &mut [u32],
         ) {
             let local = UNIT_POS as usize;
             let cube_dim = BLOCK_SIZE as usize;
@@ -116,16 +90,11 @@ macro_rules! define_sort_kernels {
 
             $( let mut $shared_a = Shared::<[$leaf]>::new_slice(cube_dim); )+
             $( let mut $shared_b = Shared::<[$leaf]>::new_slice(cube_dim); )+
-            let mut indices_a = Shared::<[u32]>::new_slice(cube_dim);
-            let mut indices_b = Shared::<[u32]>::new_slice(cube_dim);
 
             if local < tile_len {
                 Layout::decompose(Expr::$method($( $slot, )+ read_offsets, global)).store(
                     $( &mut $shared_a, )+ zero_offsets, local,
                 );
-                if carry_indices {
-                    indices_a[local] = global as u32;
-                }
             }
             sync_cube();
 
@@ -182,24 +151,15 @@ macro_rules! define_sort_kernels {
                                 Leaves::load($( &$shared_a, )+ zero_offsets, base + left_rank).store(
                                     $( &mut $shared_b, )+ zero_offsets, local,
                                 );
-                                if carry_indices {
-                                    indices_b[local] = indices_a[base + left_rank];
-                                }
                             } else {
                                 Leaves::load($( &$shared_a, )+ zero_offsets, right_start + right_rank).store(
                                     $( &mut $shared_b, )+ zero_offsets, local,
                                 );
-                                if carry_indices {
-                                    indices_b[local] = indices_a[right_start + right_rank];
-                                }
                             }
                         } else {
                             Leaves::load($( &$shared_a, )+ zero_offsets, right_start + right_rank).store(
                                 $( &mut $shared_b, )+ zero_offsets, local,
                             );
-                            if carry_indices {
-                                indices_b[local] = indices_a[right_start + right_rank];
-                            }
                         }
                     } else {
                         while low.read() < high.read() {
@@ -229,24 +189,15 @@ macro_rules! define_sort_kernels {
                                 Leaves::load($( &$shared_b, )+ zero_offsets, base + left_rank).store(
                                     $( &mut $shared_a, )+ zero_offsets, local,
                                 );
-                                if carry_indices {
-                                    indices_a[local] = indices_b[base + left_rank];
-                                }
                             } else {
                                 Leaves::load($( &$shared_b, )+ zero_offsets, right_start + right_rank).store(
                                     $( &mut $shared_a, )+ zero_offsets, local,
                                 );
-                                if carry_indices {
-                                    indices_a[local] = indices_b[right_start + right_rank];
-                                }
                             }
                         } else {
                             Leaves::load($( &$shared_b, )+ zero_offsets, right_start + right_rank).store(
                                 $( &mut $shared_a, )+ zero_offsets, local,
                             );
-                            if carry_indices {
-                                indices_a[local] = indices_b[right_start + right_rank];
-                            }
                         }
                     }
                 }
@@ -260,16 +211,10 @@ macro_rules! define_sort_kernels {
                     Leaves::load($( &$shared_a, )+ zero_offsets, local).store(
                         $( $out, )+ write_offsets, global,
                     );
-                    if carry_indices {
-                        output_indices[global] = indices_a[local];
-                    }
                 } else {
                     Leaves::load($( &$shared_b, )+ zero_offsets, local).store(
                         $( $out, )+ write_offsets, global,
                     );
-                    if carry_indices {
-                        output_indices[global] = indices_b[local];
-                    }
                 }
             }
         }
@@ -287,14 +232,11 @@ macro_rules! define_sort_kernels {
         >(
             $( $slot: &[$leaf], )+
             read_offsets: &[u32],
-            input_indices: &[u32],
             logical_len_buffer: &[u32],
             params: &[u32],
-            #[comptime] carry_indices: bool,
             zero_offsets: &[u32],
             $( $out: &mut [$leaf], )+
             write_offsets: &[u32],
-            output_indices: &mut [u32],
         ) {
             let logical_len = logical_len_buffer[0] as usize;
             let run_width = params[0] as usize;
@@ -408,7 +350,6 @@ macro_rules! define_sort_kernels {
                     let tile_len = left_count + right_count;
 
                     $( let mut $shared_a = Shared::<[$leaf]>::new_slice(BLOCK_ITEMS * $merge_items); )+
-                    let mut shared_indices = Shared::<[u32]>::new_slice(BLOCK_ITEMS * $merge_items);
                     let load_pos = RuntimeCell::<usize>::new(UNIT_POS as usize);
                     while load_pos.read() < tile_len {
                         let source = if load_pos.read() < left_count {
@@ -419,9 +360,6 @@ macro_rules! define_sort_kernels {
                         Layout::decompose(Expr::$method($( $slot, )+ read_offsets, source)).store(
                             $( &mut $shared_a, )+ zero_offsets, load_pos.read(),
                         );
-                        if carry_indices {
-                            shared_indices[load_pos.read()] = input_indices[source];
-                        }
                         load_pos.store(load_pos.read() + BLOCK_ITEMS);
                     }
                     sync_cube();
@@ -486,18 +424,12 @@ macro_rules! define_sort_kernels {
                                 Leaves::load(
                                     $( &$shared_a, )+ zero_offsets, left_rank.read(),
                                 ).store($( $out, )+ write_offsets, output);
-                                if carry_indices {
-                                    output_indices[output] = shared_indices[left_rank.read()];
-                                }
                                 left_rank.store(left_rank.read() + 1usize);
                             } else {
                                 let source = left_count + right_rank.read();
                                 Leaves::load($( &$shared_a, )+ zero_offsets, source).store(
                                     $( $out, )+ write_offsets, output,
                                 );
-                                if carry_indices {
-                                    output_indices[output] = shared_indices[source];
-                                }
                                 right_rank.store(right_rank.read() + 1usize);
                             }
                             local_cursor.store(local_cursor.read() + 1usize);
@@ -526,23 +458,10 @@ trait SortPassDispatch<R, Input, Output, Item, ReadSlots, WriteSlots, Less>
 where
     R: Runtime,
 {
-    fn block(
-        exec: &Executor<R>,
-        input: &Input,
-        output: &Output,
-        indices: &crate::DeviceVec<R, u32>,
-        carry_indices: bool,
-    ) -> Result<(), Error>;
+    fn block(exec: &Executor<R>, input: &Input, output: &Output) -> Result<(), Error>;
 
-    fn merge(
-        exec: &Executor<R>,
-        input: &Input,
-        input_indices: &crate::DeviceVec<R, u32>,
-        output: &Output,
-        output_indices: &crate::DeviceVec<R, u32>,
-        width: usize,
-        carry_indices: bool,
-    ) -> Result<(), Error>;
+    fn merge(exec: &Executor<R>, input: &Input, output: &Output, width: usize)
+    -> Result<(), Error>;
 }
 
 macro_rules! impl_sort_pass_dispatch {
@@ -577,8 +496,6 @@ macro_rules! impl_sort_pass_dispatch {
                 exec: &Executor<R>,
                 input: &Input,
                 output: &Output,
-                indices: &crate::DeviceVec<R, u32>,
-                carry_indices: bool,
             ) -> Result<(), Error> {
                 let capacity = input.logical_len()?;
                 if output.logical_len()? < capacity {
@@ -616,11 +533,9 @@ macro_rules! impl_sort_pass_dispatch {
                         $( BufferArg::from_raw_parts(reads.slots[$index].0.clone(), reads.slots[$index].1), )+
                         BufferArg::from_raw_parts(read_offsets, reads.offsets.len()),
                         BufferArg::from_raw_parts(logical_len.handle.clone(), 1),
-                        carry_indices,
                         BufferArg::from_raw_parts(zero_offsets_handle, zero_offsets.len()),
                         $( BufferArg::from_raw_parts(writes.slots[$index].0.clone(), writes.slots[$index].1), )+
                         BufferArg::from_raw_parts(write_offsets, writes.offsets.len()),
-                        BufferArg::from_raw_parts(indices.handle.clone(), indices.capacity()),
                     );
                 }
                 Ok(())
@@ -629,11 +544,8 @@ macro_rules! impl_sort_pass_dispatch {
             fn merge(
                 exec: &Executor<R>,
                 input: &Input,
-                input_indices: &crate::DeviceVec<R, u32>,
                 output: &Output,
-                output_indices: &crate::DeviceVec<R, u32>,
                 width: usize,
-                carry_indices: bool,
             ) -> Result<(), Error> {
                 let capacity = input.logical_len()?;
                 if capacity == 0 {
@@ -673,20 +585,11 @@ macro_rules! impl_sort_pass_dispatch {
                         CubeDim::new_1d(BLOCK_SIZE),
                         $( BufferArg::from_raw_parts(reads.slots[$index].0.clone(), reads.slots[$index].1), )+
                         BufferArg::from_raw_parts(read_offsets, reads.offsets.len()),
-                        BufferArg::from_raw_parts(
-                            input_indices.handle.clone(),
-                            input_indices.capacity(),
-                        ),
                         BufferArg::from_raw_parts(logical_len.handle.clone(), 1),
                         BufferArg::from_raw_parts(params, 1),
-                        carry_indices,
                         BufferArg::from_raw_parts(zero_offsets_handle, zero_offsets.len()),
                         $( BufferArg::from_raw_parts(writes.slots[$index].0.clone(), writes.slots[$index].1), )+
                         BufferArg::from_raw_parts(write_offsets, writes.offsets.len()),
-                        BufferArg::from_raw_parts(
-                            output_indices.handle.clone(),
-                            output_indices.capacity(),
-                        ),
                     );
                 }
                 Ok(())
@@ -710,11 +613,8 @@ impl_sort_pass_dispatch!(crate::A12, crate::S12, Eval12, block_sort_s12, merge_r
 
 /// Capability for sorting an owned flat-row storage value.
 pub(crate) trait SortStorageItem<R: Runtime, Less>: RowAlloc<R> + Sized {
-    fn sort_storage(
-        exec: &Executor<R>,
-        input: Self::RowStorage,
-        carry_indices: bool,
-    ) -> Result<OrderingResult<R, Self::RowStorage>, Error>;
+    fn sort_storage(exec: &Executor<R>, input: Self::RowStorage)
+    -> Result<Self::RowStorage, Error>;
 }
 
 impl<R, Item, Less> SortStorageItem<R, Less> for Item
@@ -744,24 +644,15 @@ where
     fn sort_storage(
         exec: &Executor<R>,
         input: Self::RowStorage,
-        carry_indices: bool,
-    ) -> Result<OrderingResult<R, Self::RowStorage>, Error> {
+    ) -> Result<Self::RowStorage, Error> {
         let len = input.len()?;
         let extent = input.logical_extent();
         if len == 0 {
-            return Ok(OrderingResult {
-                sorted_keys: input,
-                control: OrderingControl::new(exec.alloc_row::<u32>(0)),
-            });
+            return Ok(input);
         }
 
         let mut current_keys = exec.alloc_row::<Item>(len);
         current_keys.set_logical_extent(extent.clone());
-        let index_len = if carry_indices { len } else { 1 };
-        let mut current_indices = exec.alloc_row::<u32>(index_len);
-        if carry_indices {
-            current_indices.set_logical_extent(extent.clone());
-        }
         let input_read = input.read();
         <Dispatch<
             <<<Item as RowAlloc<R>>::RowStorage as RowStorage<R>>::Read as ReadExpression>::ReadArity,
@@ -770,17 +661,11 @@ where
             exec,
             &input_read,
             &current_keys.write(),
-            &current_indices,
-            carry_indices,
         )?;
 
         if len > BLOCK_ITEMS {
             let mut next_keys = exec.alloc_row::<Item>(len);
             next_keys.set_logical_extent(extent.clone());
-            let mut next_indices = exec.alloc_row::<u32>(index_len);
-            if carry_indices {
-                next_indices.set_logical_extent(extent);
-            }
             let mut width = BLOCK_ITEMS;
             while width < len {
                 let current_read = current_keys.read();
@@ -798,22 +683,15 @@ where
                 >>::merge(
                     exec,
                     &current_read,
-                    &current_indices,
                     &next_keys.write(),
-                    &next_indices,
                     width,
-                    carry_indices,
                 )?;
                 core::mem::swap(&mut current_keys, &mut next_keys);
-                core::mem::swap(&mut current_indices, &mut next_indices);
                 width = width.saturating_mul(2);
             }
         }
 
-        Ok(OrderingResult {
-            sorted_keys: current_keys,
-            control: OrderingControl::new(current_indices),
-        })
+        Ok(current_keys)
     }
 }
 
@@ -849,16 +727,11 @@ macro_rules! impl_sort_leaves {
             fn sort_storage<Less>(
                 exec: &Executor<R>,
                 input: Item::RowStorage,
-                carry_indices: bool,
-            ) -> Result<OrderingResult<R, Item::RowStorage>, Error>
+            ) -> Result<Item::RowStorage, Error>
             where
                 Less: BinaryPredicateOp<Item>,
             {
-                <Item as SortStorageItem<R, Less>>::sort_storage(
-                    exec,
-                    input,
-                    carry_indices,
-                )
+                <Item as SortStorageItem<R, Less>>::sort_storage(exec, input)
             }
         }
     };

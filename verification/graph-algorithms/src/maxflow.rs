@@ -185,8 +185,8 @@ pub fn solve<R: Runtime>(
     let residual_count = original_count
         .checked_mul(2)
         .expect("residual edge capacity exceeds u32");
-    let residual_sources = exec.alloc::<u32>(residual_count as usize);
-    let residual_destinations = exec.alloc::<u32>(residual_count as usize);
+    let residual_sources = exec.alloc::<u32>(residual_count);
+    let residual_destinations = exec.alloc::<u32>(residual_count);
     let residual_capacities = common::filled(exec, residual_count as usize, 0u32)?;
     vector::copy(
         exec,

@@ -150,7 +150,7 @@ where
     Item: MAlloc<R>,
     Equal: BinaryPredicateOp<Item>,
 {
-    let capacity = input.capacity()? as usize;
+    let capacity = input.capacity()?;
     let output = exec.alloc::<Item>(capacity);
     let len = unique_into(exec, input, equal, output.slice_mut(..))?;
     crate::api::iter::into_exact_prefix::<R, Item>(exec, output, len.read(exec)?)

@@ -120,8 +120,8 @@ pub fn solve_with_choices<R: Runtime>(
         let doubled = edge_count
             .checked_mul(2)
             .expect("symmetrized R-MAT edge count exceeds u32");
-        let symmetric_sources = exec.alloc::<u32>(doubled as usize);
-        let symmetric_destinations = exec.alloc::<u32>(doubled as usize);
+        let symmetric_sources = exec.alloc::<u32>(doubled);
+        let symmetric_destinations = exec.alloc::<u32>(doubled);
         vector::copy(
             exec,
             sources.slice(..),

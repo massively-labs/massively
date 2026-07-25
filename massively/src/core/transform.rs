@@ -3,13 +3,13 @@
 use cubecl::prelude::*;
 
 use crate::{
-    A13, Dispatch, Error, Executor, MStorageElement, ReadExpression, S12, StorageLayout, Transform,
+    Error, Executor, ReadExpression, StorageLayout, Transform,
     eval::Eval13,
     op::UnaryOp,
     output::{
         LowerOutputExpression, OutputBindings, OutputExpression, PaddedOutputSlots, StageOutput,
     },
-    read::{Env0, Env12, Env13, KernelReadSlots, LowerReadExpression, PaddedReadSlots},
+    read::{Env0, LowerReadExpression, PaddedReadSlots},
     reduce::{StageRead, StagedBindings},
     storage::{Decompose, StorePadded12, StorePadded12Expand},
 };
@@ -208,83 +208,6 @@ where
     Ok(())
 }
 
-#[doc(hidden)]
-pub trait MaterializeDispatch<R, Input, Output, ReadSlots, WriteSlots>
-where
-    R: Runtime,
-{
-    fn run(exec: &Executor<R>, input: &Input, output: &Output) -> Result<(), Error>;
-}
-
-macro_rules! impl_padded_materialize_dispatch {
-    ($arity:ty, $eval:ident, $kernel:ident; [$( $leaf:ident : $read_index:literal ),+], $read_env:ty) => {
-        impl<
-            R, Input, Output, Source, Leaves,
-            O0, O1, O2, O3, O4, O5, O6, O7, O8, O9, O10, O11,
-            $( $leaf, )+
-        > MaterializeDispatch<
-            R,
-            Input,
-            Output,
-            $read_env,
-            Env12<O0, O1, O2, O3, O4, O5, O6, O7, O8, O9, O10, O11>,
-        >
-            for Dispatch<$arity, S12>
-        where
-            R: Runtime,
-            $( $leaf: MStorageElement, )+
-            O0: MStorageElement,
-            O1: MStorageElement,
-            O2: MStorageElement,
-            O3: MStorageElement,
-            O4: MStorageElement,
-            O5: MStorageElement,
-            O6: MStorageElement,
-            O7: MStorageElement,
-            O8: MStorageElement,
-            O9: MStorageElement,
-            O10: MStorageElement,
-            O11: MStorageElement,
-            Source: CubeType + Send + Sync + 'static,
-            Leaves: CubeType + Send + Sync + 'static + StorePadded12<
-                O0 = O0, O1 = O1, O2 = O2, O3 = O3, O4 = O4, O5 = O5,
-                O6 = O6, O7 = O7, O8 = O8, O9 = O9, O10 = O10, O11 = O11,
-            >,
-            <Leaves as CubeType>::ExpandType: StorePadded12Expand,
-            Output::Slots: PaddedOutputSlots<Leaves = Leaves>,
-            Input: ReadExpression<Item = Source> + LowerReadExpression + StageRead<R, Env0>,
-            Input::Slots: PaddedReadSlots<
-                L0 = L0,
-                L1 = L1,
-                L2 = L2,
-                L3 = L3,
-                L4 = L4,
-                L5 = L5,
-                L6 = L6,
-                L7 = L7,
-                L8 = L8,
-                L9 = L9,
-                L10 = L10,
-                L11 = L11,
-                L12 = L12,
-            >,
-            Input::DeviceExpr: $eval<Source, $( $leaf ),+>,
-            Source: StorageLayout<StorageLeaves = Leaves>,
-            Output: OutputExpression<Item = Source>
-                + LowerOutputExpression
-                + StageOutput<R, Env0>,
-            <Output::Item as StorageLayout>::DeviceLayout:
-                Decompose<Output::Item, Leaves = Leaves>,
-        {
-            fn run(exec: &Executor<R>, input: &Input, output: &Output) -> Result<(), Error> {
-                materialize_fixed(exec, input, output)
-            }
-        }
-    };
-}
-
-impl_padded_materialize_dispatch!(A13, Eval13, materialize_a13; [L0:0,L1:1,L2:2,L3:3,L4:4,L5:5,L6:6,L7:7,L8:8,L9:9,L10:10,L11:11,L12:12], Env13<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12>);
-
 /// Evaluates a lazy read expression and writes it to a preallocated output tree.
 pub(crate) fn materialize<R, Input, Output>(
     exec: &Executor<R>,
@@ -294,49 +217,13 @@ pub(crate) fn materialize<R, Input, Output>(
 where
     R: Runtime,
     Input: ReadExpression + LowerReadExpression + StageRead<R, Env0>,
+    Input::Item: StorageLayout,
+    <Input::Item as StorageLayout>::StorageLeaves: StorePadded12,
+    <<Input::Item as StorageLayout>::StorageLeaves as CubeType>::ExpandType: StorePadded12Expand,
     Output: OutputExpression<Item = Input::Item> + LowerOutputExpression + StageOutput<R, Env0>,
-    Output::Slots: PaddedOutputSlots,
-    Dispatch<A13, S12>: MaterializeDispatch<
-            R,
-            Input,
-            Output,
-            KernelReadSlots<Input::Slots>,
-            crate::output::KernelOutputSlots<Output::Slots>,
-        >,
+    Output::Slots: PaddedOutputSlots<Leaves = <Input::Item as StorageLayout>::StorageLeaves>,
 {
-    <Dispatch<A13, S12> as MaterializeDispatch<
-        R,
-        Input,
-        Output,
-        KernelReadSlots<Input::Slots>,
-        crate::output::KernelOutputSlots<Output::Slots>,
-    >>::run(exec, &input, &output)
-}
-
-/// Applies a unary operation and writes its result to preallocated storage.
-pub(crate) fn transform<R, Input, Output, Op>(
-    exec: &Executor<R>,
-    input: Input,
-    op: Op,
-    output: Output,
-) -> Result<(), Error>
-where
-    R: Runtime,
-    Input: ReadExpression,
-    Op: UnaryOp<Input::Item, Output = Output::Item>,
-    Transform<Input, Op>:
-        ReadExpression<Item = Output::Item> + LowerReadExpression + StageRead<R, Env0>,
-    Output: OutputExpression + LowerOutputExpression + StageOutput<R, Env0>,
-    Output::Slots: PaddedOutputSlots,
-    Dispatch<A13, S12>: MaterializeDispatch<
-            R,
-            Transform<Input, Op>,
-            Output,
-            KernelReadSlots<<Transform<Input, Op> as LowerReadExpression>::Slots>,
-            crate::output::KernelOutputSlots<Output::Slots>,
-        >,
-{
-    materialize(exec, Transform::new(input, op), output)
+    materialize_fixed(exec, &input, &output)
 }
 
 /// Applies a unary operation through the fixed thirteen-read/twelve-write ABI
@@ -414,7 +301,7 @@ mod tests {
         let input: DeviceVec<_, u32> = exec.to_device(&[1_u32, 2, 3, 4]);
         let output = exec.to_device(&[99_u32; 6]);
 
-        transform(&exec, input.slice(1..4), Double, output.slice_mut(2..5)).unwrap();
+        transform_fixed(&exec, input.slice(1..4), Double, output.slice_mut(2..5)).unwrap();
 
         assert_eq!(exec.to_host(&output).unwrap(), vec![99, 99, 4, 6, 8, 99]);
     }

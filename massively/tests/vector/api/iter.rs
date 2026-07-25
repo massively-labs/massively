@@ -12,7 +12,7 @@ where
     Output: MIterMut<R>,
     Output::Item: MAlloc<R>,
 {
-    exec.alloc::<Output::Item>(MIterMut::len(output).unwrap() as usize)
+    exec.alloc::<Output::Item>(MIterMut::len(output).unwrap())
 }
 
 fn transform_where_into<R, Input, Stencil, Output, Op>(

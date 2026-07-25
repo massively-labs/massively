@@ -10,11 +10,10 @@ use crate::{
     MIndex, Zip,
     arity::{A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, AddArity, ReadArity},
     eval::{
-        AdjacentExpr, AdjacentIndexedTransformExpr, Broadcast, Count, DeviceExpr, Direct, Eval1,
-        Eval2, Eval3, Eval4, Eval5, Eval6, Eval7, Eval8, Eval9, Eval10, Eval11, Eval12, Eval13,
-        IndexedTransformExpr, PermuteExpr, ReverseCount, SegmentIteratorExpr, Slot0, Slot1, Slot2,
-        Slot3, Slot4, Slot5, Slot6, Slot7, Slot8, Slot9, Slot10, Slot11, Slot12, StrideCount,
-        TransformExpr, ZipExpr,
+        AdjacentExpr, AdjacentIndexedTransformExpr, Broadcast, Count, DeviceExpr, Direct,
+        DivModCount, Eval13, IndexedTransformExpr, PermuteExpr, ReverseCount, SegmentIteratorExpr,
+        Slot0, Slot1, Slot2, Slot3, Slot4, Slot5, Slot6, Slot7, Slot8, Slot9, Slot10, Slot11,
+        Slot12, StrideCount, TransformExpr, ZipExpr,
     },
     extent::LogicalExtent,
     op::{IndexedBinaryOp, IndexedUnaryOp, UnaryOp},
@@ -97,10 +96,6 @@ impl<T> DeviceSlice<T> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    pub(crate) fn capacity(&self) -> usize {
-        self.len
     }
 
     /// Returns a read-only subview without copying device data.
@@ -224,6 +219,15 @@ pub struct Stride {
     pub len: usize,
 }
 
+/// A finite index leaf yielding `(start + index) / divisor % modulus`.
+#[derive(Clone, Copy, Debug)]
+pub struct DivModCounting {
+    pub start: u32,
+    pub divisor: u32,
+    pub modulus: u32,
+    pub len: usize,
+}
+
 /// A descending `u32` index leaf yielding `len - 1 - index`.
 #[derive(Clone, Copy, Debug)]
 pub struct ReverseCounting {
@@ -256,13 +260,6 @@ impl<Values> Reverse<Values> {
             len: None,
         }
     }
-
-    pub(crate) fn indices(&self, input_len: usize) -> ReverseCounting {
-        ReverseCounting {
-            start: input_len.saturating_sub(1).saturating_sub(self.offset),
-            len: self.len.unwrap_or(input_len),
-        }
-    }
 }
 
 impl Counting {
@@ -274,6 +271,17 @@ impl Counting {
 impl Stride {
     pub const fn new(start: u32, step: u32, len: usize) -> Self {
         Self { start, step, len }
+    }
+}
+
+impl DivModCounting {
+    pub const fn new(start: u32, divisor: u32, modulus: u32, len: usize) -> Self {
+        Self {
+            start,
+            divisor,
+            modulus,
+            len,
+        }
     }
 }
 
@@ -387,6 +395,10 @@ impl<Input: Copy, Op> Copy for Adjacent<Input, Op> {}
 
 impl<Input, Op> Adjacent<Input, Op> {
     pub fn new(input: Input, _op: Op) -> Self {
+        Self::from_input(input)
+    }
+
+    pub(crate) fn from_input(input: Input) -> Self {
         Self {
             input,
             _op: PhantomData,
@@ -486,6 +498,11 @@ impl ReadExpression for Counting {
 }
 
 impl ReadExpression for Stride {
+    type Item = crate::MIndex;
+    type ReadArity = A1;
+}
+
+impl ReadExpression for DivModCounting {
     type Item = crate::MIndex;
     type ReadArity = A1;
 }
@@ -647,6 +664,20 @@ impl SliceExpression for Stride {
                 )
                 .expect("stride slice start overflow"),
             self.step,
+            len,
+        )
+    }
+}
+
+impl SliceExpression for DivModCounting {
+    fn slice_expression(&self, start: usize, len: usize) -> Self {
+        let start = u32::try_from(start).expect("div-mod slice start exceeds u32");
+        Self::new(
+            self.start
+                .checked_add(start)
+                .expect("div-mod slice start overflow"),
+            self.divisor,
+            self.modulus,
             len,
         )
     }
@@ -860,6 +891,11 @@ macro_rules! impl_leaf_binding {
             type NextEnv = $counting_next;
         }
 
+        impl<$( $env_ty ),*> BindSlots<$env> for DivModCounting {
+            type Expr = $slot<u32, DivModCount>;
+            type NextEnv = $counting_next;
+        }
+
         impl<$( $env_ty ),*> BindSlots<$env> for ReverseCounting {
             type Expr = $slot<u32, ReverseCount>;
             type NextEnv = $counting_next;
@@ -1034,188 +1070,6 @@ impl<L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L12> SlotEnvironment
     type Arity = A13;
 }
 
-/// Connects a final slot environment to its arity-specific evaluator.
-#[doc(hidden)]
-pub trait EvalEnvironment<Expr, Item: CubeType>: SlotEnvironment {}
-
-impl<Expr, Item, L0> EvalEnvironment<Expr, Item> for Env1<L0>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    Expr: Eval1<Item, L0>,
-{
-}
-impl<Expr, Item, L0, L1> EvalEnvironment<Expr, Item> for Env2<L0, L1>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    Expr: Eval2<Item, L0, L1>,
-{
-}
-impl<Expr, Item, L0, L1, L2> EvalEnvironment<Expr, Item> for Env3<L0, L1, L2>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    Expr: Eval3<Item, L0, L1, L2>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3> EvalEnvironment<Expr, Item> for Env4<L0, L1, L2, L3>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    Expr: Eval4<Item, L0, L1, L2, L3>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4> EvalEnvironment<Expr, Item> for Env5<L0, L1, L2, L3, L4>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    Expr: Eval5<Item, L0, L1, L2, L3, L4>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5> EvalEnvironment<Expr, Item>
-    for Env6<L0, L1, L2, L3, L4, L5>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    Expr: Eval6<Item, L0, L1, L2, L3, L4, L5>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5, L6> EvalEnvironment<Expr, Item>
-    for Env7<L0, L1, L2, L3, L4, L5, L6>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    L6: MStorageElement,
-    Expr: Eval7<Item, L0, L1, L2, L3, L4, L5, L6>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5, L6, L7> EvalEnvironment<Expr, Item>
-    for Env8<L0, L1, L2, L3, L4, L5, L6, L7>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    L6: MStorageElement,
-    L7: MStorageElement,
-    Expr: Eval8<Item, L0, L1, L2, L3, L4, L5, L6, L7>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5, L6, L7, L8> EvalEnvironment<Expr, Item>
-    for Env9<L0, L1, L2, L3, L4, L5, L6, L7, L8>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    L6: MStorageElement,
-    L7: MStorageElement,
-    L8: MStorageElement,
-    Expr: Eval9<Item, L0, L1, L2, L3, L4, L5, L6, L7, L8>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9> EvalEnvironment<Expr, Item>
-    for Env10<L0, L1, L2, L3, L4, L5, L6, L7, L8, L9>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    L6: MStorageElement,
-    L7: MStorageElement,
-    L8: MStorageElement,
-    L9: MStorageElement,
-    Expr: Eval10<Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10> EvalEnvironment<Expr, Item>
-    for Env11<L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    L6: MStorageElement,
-    L7: MStorageElement,
-    L8: MStorageElement,
-    L9: MStorageElement,
-    L10: MStorageElement,
-    Expr: Eval11<Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11> EvalEnvironment<Expr, Item>
-    for Env12<L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    L6: MStorageElement,
-    L7: MStorageElement,
-    L8: MStorageElement,
-    L9: MStorageElement,
-    L10: MStorageElement,
-    L11: MStorageElement,
-    Expr: Eval12<Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11>,
-{
-}
-impl<Expr, Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L12> EvalEnvironment<Expr, Item>
-    for Env13<L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L12>
-where
-    Item: CubeType,
-    L0: MStorageElement,
-    L1: MStorageElement,
-    L2: MStorageElement,
-    L3: MStorageElement,
-    L4: MStorageElement,
-    L5: MStorageElement,
-    L6: MStorageElement,
-    L7: MStorageElement,
-    L8: MStorageElement,
-    L9: MStorageElement,
-    L10: MStorageElement,
-    L11: MStorageElement,
-    L12: MStorageElement,
-    Expr: Eval13<Item, L0, L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L12>,
-{
-}
-
 /// Pads an actual read environment to the fixed thirteen-buffer kernel ABI.
 /// Unused slots are typed as `u32`; device expressions never reference them.
 #[doc(hidden)]
@@ -1352,35 +1206,6 @@ impl_padded_read_slots!(Env10<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9>; [L0,L1,L2,L3,L4,L5
 impl_padded_read_slots!(Env11<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10>; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,u32,u32]);
 impl_padded_read_slots!(Env12<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11>; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,u32]);
 impl_padded_read_slots!(Env13<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12>; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12]);
-
-/// Proves that an expression can be evaluated through the fixed read ABI.
-#[doc(hidden)]
-pub trait FixedEvalEnvironment<Expr, Item: CubeType>: PaddedReadSlots {}
-
-macro_rules! impl_fixed_eval_environment {
-    ($env:ty; [$($actual:ident),+]; [$($padded:ty),+]) => {
-        impl<Expr, Item, $($actual),+> FixedEvalEnvironment<Expr, Item> for $env
-        where
-            Item: CubeType,
-            $($actual: MStorageElement,)+
-            Expr: Eval13<Item, $($padded),+>,
-        {}
-    };
-}
-
-impl_fixed_eval_environment!(Env1<L0>; [L0]; [L0,u32,u32,u32,u32,u32,u32,u32,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env2<L0,L1>; [L0,L1]; [L0,L1,u32,u32,u32,u32,u32,u32,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env3<L0,L1,L2>; [L0,L1,L2]; [L0,L1,L2,u32,u32,u32,u32,u32,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env4<L0,L1,L2,L3>; [L0,L1,L2,L3]; [L0,L1,L2,L3,u32,u32,u32,u32,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env5<L0,L1,L2,L3,L4>; [L0,L1,L2,L3,L4]; [L0,L1,L2,L3,L4,u32,u32,u32,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env6<L0,L1,L2,L3,L4,L5>; [L0,L1,L2,L3,L4,L5]; [L0,L1,L2,L3,L4,L5,u32,u32,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env7<L0,L1,L2,L3,L4,L5,L6>; [L0,L1,L2,L3,L4,L5,L6]; [L0,L1,L2,L3,L4,L5,L6,u32,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env8<L0,L1,L2,L3,L4,L5,L6,L7>; [L0,L1,L2,L3,L4,L5,L6,L7]; [L0,L1,L2,L3,L4,L5,L6,L7,u32,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env9<L0,L1,L2,L3,L4,L5,L6,L7,L8>; [L0,L1,L2,L3,L4,L5,L6,L7,L8]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,u32,u32,u32,u32]);
-impl_fixed_eval_environment!(Env10<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9>; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,u32,u32,u32]);
-impl_fixed_eval_environment!(Env11<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10>; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,u32,u32]);
-impl_fixed_eval_environment!(Env12<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11>; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,u32]);
-impl_fixed_eval_environment!(Env13<L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12>; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12]; [L0,L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12]);
 
 /// Fully bound form of a read expression.
 ///
@@ -1544,7 +1369,7 @@ mod tests {
                 + LowerReadExpression<DeviceExpr = Expr, Slots = Slots>,
             E: ReadExpression,
             Expr: DeviceExpr<E::Item>,
-            Slots: SlotEnvironment<Arity = E::ReadArity> + EvalEnvironment<Expr, E::Item>,
+            Slots: SlotEnvironment<Arity = E::ReadArity>,
         {
         }
 

@@ -656,18 +656,6 @@ where
     source.lower_bounds(exec, values)
 }
 
-pub(crate) fn lower_bounds_typed<R, Source, Values, Less>(
-    exec: &Executor<R>,
-    source: Source,
-    values: Values,
-) -> Result<DeviceVec<R, u32>, Error>
-where
-    R: Runtime,
-    Source: SortedBoundsInput<R, Values, Less>,
-{
-    source.lower_bounds(exec, values)
-}
-
 pub(crate) fn upper_bounds_storage<R, Source, Values, Less>(
     exec: &Executor<R>,
     source: Source,
@@ -679,50 +667,6 @@ where
     Source: SortedBoundsInput<R, Values, Less>,
 {
     source.upper_bounds(exec, values)
-}
-
-pub(crate) fn upper_bounds_typed<R, Source, Values, Less>(
-    exec: &Executor<R>,
-    source: Source,
-    values: Values,
-) -> Result<DeviceVec<R, u32>, Error>
-where
-    R: Runtime,
-    Source: SortedBoundsInput<R, Values, Less>,
-{
-    source.upper_bounds(exec, values)
-}
-
-/// Finds the lower bound of each value in a sorted source.
-pub(crate) fn lower_bound<R, Source, Values, Less>(
-    exec: &Executor<R>,
-    source: Source,
-    values: Values,
-    _less: Less,
-    output: crate::DeviceSliceMut<u32>,
-) -> Result<(), Error>
-where
-    R: Runtime,
-    Source: SortedBoundsInput<R, Values, Less>,
-{
-    let bounds = source.lower_bounds(exec, values)?;
-    crate::materialize(exec, bounds.column(), output)
-}
-
-/// Finds the upper bound of each value in a sorted source.
-pub(crate) fn upper_bound<R, Source, Values, Less>(
-    exec: &Executor<R>,
-    source: Source,
-    values: Values,
-    _less: Less,
-    output: crate::DeviceSliceMut<u32>,
-) -> Result<(), Error>
-where
-    R: Runtime,
-    Source: SortedBoundsInput<R, Values, Less>,
-{
-    let bounds = source.upper_bounds(exec, values)?;
-    crate::materialize(exec, bounds.column(), output)
 }
 
 impl<R, Left, Right, Op> PairCodeInput<R, Right, Op> for Left
@@ -1049,24 +993,12 @@ mod tests {
         );
 
         let values = exec.to_device(&[0_u32, 2, 3, 5]);
-        let lower = exec.to_device(&[99_u32; 4]);
-        let upper = exec.to_device(&[99_u32; 4]);
-        crate::api::algorithm::lower_bound_into(
-            &exec,
-            source.column(),
-            values.column(),
-            LessU32,
-            lower.slice_mut(..),
-        )
-        .unwrap();
-        crate::api::algorithm::upper_bound_into(
-            &exec,
-            source.column(),
-            values.column(),
-            LessU32,
-            upper.slice_mut(..),
-        )
-        .unwrap();
+        let lower =
+            crate::api::algorithm::lower_bound(&exec, source.column(), values.column(), LessU32)
+                .unwrap();
+        let upper =
+            crate::api::algorithm::upper_bound(&exec, source.column(), values.column(), LessU32)
+                .unwrap();
         assert_eq!(exec.to_host(&lower).unwrap(), vec![0, 1, 3, 4]);
         assert_eq!(exec.to_host(&upper).unwrap(), vec![0, 3, 3, 4]);
     }

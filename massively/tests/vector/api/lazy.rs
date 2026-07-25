@@ -8,6 +8,8 @@ use massively::{
 
 struct Double;
 struct Sum;
+struct Difference;
+struct PairDifference;
 struct LookupTable;
 struct LookupPairTable;
 struct LookupTwoTables;
@@ -26,6 +28,20 @@ impl UnaryOp<massively::MIndex> for Double {
 impl ReductionOp<u32> for Sum {
     fn apply(lhs: u32, rhs: u32) -> u32 {
         lhs + rhs
+    }
+}
+
+#[cubecl::cube]
+impl ReductionOp<u32> for Difference {
+    fn apply(previous: u32, current: u32) -> u32 {
+        current - previous
+    }
+}
+
+#[cubecl::cube]
+impl ReductionOp<(u32, u32)> for PairDifference {
+    fn apply(previous: (u32, u32), current: (u32, u32)) -> (u32, u32) {
+        (current.0 - previous.0, current.1 - previous.1)
     }
 }
 
@@ -298,4 +314,123 @@ fn reverse_composes_with_slicing_and_multi_column_inputs() {
     let (output_first, output_second) = MStorage::into_columns(output);
     assert_eq!(exec.to_host(&output_first).unwrap(), vec![3, 2, 1]);
     assert_eq!(exec.to_host(&output_second).unwrap(), vec![30, 20, 10]);
+}
+
+#[test]
+fn repeat_each_is_lazy_sliceable_and_supports_multi_column_rows() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let first = exec.to_device(&[10_u32, 20, 30]);
+    let second = exec.to_device(&[1_u32, 2, 3]);
+    let repeated = lazy::repeat_each(zip2(first.slice(..), second.slice(..)), 3)
+        .slice(2..8)
+        .slice(1..5);
+
+    assert_eq!(MIter::<WgpuRuntime>::len(&repeated).unwrap(), 4);
+    let output = map(&exec, repeated, massively::op::Identity).unwrap();
+    let (first, second) = MStorage::into_columns(output);
+
+    assert_eq!(exec.to_host(&first).unwrap(), vec![20, 20, 20, 30]);
+    assert_eq!(exec.to_host(&second).unwrap(), vec![2, 2, 2, 3]);
+}
+
+#[test]
+fn tile_is_lazy_sliceable_and_supports_multi_column_rows() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let first = exec.to_device(&[10_u32, 20, 30]);
+    let second = exec.to_device(&[1_u32, 2, 3]);
+    let tiled = lazy::tile(zip2(first.slice(..), second.slice(..)), 3)
+        .slice(2..8)
+        .slice(1..5);
+
+    assert_eq!(MIter::<WgpuRuntime>::len(&tiled).unwrap(), 4);
+    let output = map(&exec, tiled, massively::op::Identity).unwrap();
+    let (first, second) = MStorage::into_columns(output);
+
+    assert_eq!(exec.to_host(&first).unwrap(), vec![10, 20, 30, 10]);
+    assert_eq!(exec.to_host(&second).unwrap(), vec![1, 2, 3, 1]);
+}
+
+#[test]
+fn repeat_each_and_tile_handle_empty_and_zero_repetitions() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let empty = exec.to_device::<u32>(&[]);
+    let values = exec.to_device(&[1_u32, 2, 3]);
+
+    let repeated_empty = lazy::repeat_each(empty.slice(..), 5);
+    let tiled_empty = lazy::tile(empty.slice(..), 5);
+    let repeated_zero = lazy::repeat_each(values.slice(..), 0);
+    let tiled_zero = lazy::tile(values.slice(..), 0);
+
+    assert_eq!(MIter::<WgpuRuntime>::len(&repeated_empty).unwrap(), 0);
+    assert_eq!(MIter::<WgpuRuntime>::len(&tiled_empty).unwrap(), 0);
+    assert_eq!(MIter::<WgpuRuntime>::len(&repeated_zero).unwrap(), 0);
+    assert_eq!(MIter::<WgpuRuntime>::len(&tiled_zero).unwrap(), 0);
+
+    assert_eq!(
+        map(&exec, repeated_empty, massively::op::Identity)
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        map(&exec, tiled_zero, massively::op::Identity)
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn repeated_lazy_views_reject_lengths_larger_than_mindex() {
+    let repeated = lazy::repeat_each(lazy::counting(0).take(u32::MAX), 2);
+    let tiled = lazy::tile(lazy::counting(0).take(u32::MAX), 2);
+
+    assert!(matches!(
+        MIter::<WgpuRuntime>::len(&repeated),
+        Err(massively::Error::LengthTooLarge { .. })
+    ));
+    assert!(matches!(
+        MIter::<WgpuRuntime>::len(&tiled),
+        Err(massively::Error::LengthTooLarge { .. })
+    ));
+}
+
+#[test]
+fn lazy_adjacent_difference_preserves_global_neighbors_across_slices() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let first = exec.to_device(&[1_u32, 4, 10, 20]);
+    let second = exec.to_device(&[2_u32, 8, 18, 32]);
+    let differences =
+        lazy::adjacent_difference(zip2(first.slice(..), second.slice(..)), PairDifference)
+            .slice(1..4)
+            .slice(1..3);
+
+    let output = map(&exec, differences, massively::op::Identity).unwrap();
+    let (first, second) = MStorage::into_columns(output);
+
+    assert_eq!(exec.to_host(&first).unwrap(), vec![6, 10]);
+    assert_eq!(exec.to_host(&second).unwrap(), vec![10, 14]);
+}
+
+#[test]
+fn lazy_adjacent_difference_handles_empty_and_singleton_inputs() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let empty = exec.to_device::<u32>(&[]);
+    let singleton = exec.to_device(&[7_u32]);
+
+    let empty_output = map(
+        &exec,
+        lazy::adjacent_difference(empty.slice(..), Difference),
+        massively::op::Identity,
+    )
+    .unwrap();
+    let singleton_output = map(
+        &exec,
+        lazy::adjacent_difference(singleton.slice(..), Difference),
+        massively::op::Identity,
+    )
+    .unwrap();
+
+    assert_eq!(empty_output.len(), 0);
+    assert_eq!(exec.to_host(&singleton_output).unwrap(), vec![7]);
 }

@@ -8,14 +8,19 @@ use massively::{
     op::ReductionOp,
     op::UnaryOp,
     seg::{
-        AllOf, Executable, FlatMap, ForEachSegment, Map, Reduce, Segment, SegmentIterator,
-        Segmentation, Unique,
+        AdjacentFind, AllOf, Executable, FindIf, FlatMap, ForEachSegment, Map, Reduce, Segment,
+        SegmentIterator, Segmentation, Take, Unique,
     },
     vector::{copy_where, equal, is_sorted, map as vector_map},
     zip2, zip3,
 };
 
 struct CastU64;
+
+fn assert_validated_segmentation<R: Runtime, Values>(
+    _input: &SegmentIterator<Values, Segmentation<R>>,
+) {
+}
 
 #[cubecl::cube]
 impl UnaryOp<u32> for CastU64 {
@@ -301,8 +306,12 @@ fn segmented_algorithms_return_owned_device_results() {
             SegmentIterator::new(values.slice(..), offsets.slice(..)),
         )
         .unwrap();
+    assert_validated_segmentation(&unique);
     assert_eq!(exec.to_host(unique.values()).unwrap(), vec![1, 2, 3]);
-    assert_eq!(exec.to_host(unique.offsets()).unwrap(), vec![0, 2, 3]);
+    assert_eq!(
+        exec.to_host(&unique.offsets().offsets()).unwrap(),
+        vec![0, 2, 3]
+    );
 
     let reduced = ForEachSegment(Reduce(Add, 0))
         .run(
@@ -325,12 +334,16 @@ fn segmented_flat_map_rebuilds_offsets_and_preserves_empty_segments() {
             SegmentIterator::new(values.slice(..), offsets.slice(..)),
         )
         .unwrap();
+    assert_validated_segmentation(&output);
 
     assert_eq!(
         exec.to_host(output.values()).unwrap(),
         vec![20, 21, 10, 30, 31, 32]
     );
-    assert_eq!(exec.to_host(output.offsets()).unwrap(), vec![0, 2, 2, 6]);
+    assert_eq!(
+        exec.to_host(&output.offsets().offsets()).unwrap(),
+        vec![0, 2, 2, 6]
+    );
 }
 
 #[test]
@@ -349,6 +362,11 @@ fn segmentation_representations_are_interchangeable() {
         exec.to_host(&from_lengths.segment_ids(&exec).unwrap())
             .unwrap(),
         vec![0, 1, 1, 2, 2, 2]
+    );
+    assert_eq!(
+        exec.to_host(&from_lengths.local_indices(&exec).unwrap())
+            .unwrap(),
+        vec![0, 0, 1, 0, 1, 2]
     );
 
     let ids = exec.to_device(&[0_u32, 1, 1, 2, 2, 2]);
@@ -408,6 +426,11 @@ fn segmentation_preserves_empty_segments() {
             .unwrap()
             .is_empty()
     );
+    assert!(
+        exec.to_host(&empty.local_indices(&exec).unwrap())
+            .unwrap()
+            .is_empty()
+    );
 
     let zero_offsets = exec.to_device(&[0_u32]);
     let empty_from_offsets = Segmentation::from_offsets(&exec, zero_offsets.slice(..)).unwrap();
@@ -428,6 +451,11 @@ fn segmentation_preserves_empty_segments() {
         exec.to_host(&all_empty.offsets()).unwrap(),
         vec![0, 0, 0, 0]
     );
+    assert!(
+        exec.to_host(&all_empty.local_indices(&exec).unwrap())
+            .unwrap()
+            .is_empty()
+    );
 
     let leading_empty_ids = exec.to_device(&[2_u32]);
     let leading_empty =
@@ -442,6 +470,11 @@ fn segmentation_preserves_empty_segments() {
             .unwrap(),
         vec![2]
     );
+    assert_eq!(
+        exec.to_host(&leading_empty.local_indices(&exec).unwrap())
+            .unwrap(),
+        vec![0]
+    );
 }
 
 #[test]
@@ -455,6 +488,14 @@ fn segmentation_rejects_invalid_representations_and_overflow() {
             Err(massively::Error::InvalidSegmentation)
         ));
     }
+
+    let no_values = exec.to_device(&[] as &[u32]);
+    let no_offsets = exec.to_device(&[] as &[u32]);
+    let raw = SegmentIterator::new(no_values.slice(..), no_offsets.slice(..));
+    assert_eq!(
+        <_ as MIter<WgpuRuntime>>::len(&raw),
+        Err(massively::Error::InvalidSegmentation)
+    );
 
     for ids in [&[0_u32, 2, 1][..], &[0_u32, 3][..]] {
         let ids = exec.to_device(ids);
@@ -485,8 +526,14 @@ fn segmentation_applies_to_values_and_broadcasts_multicolumn_context() {
     let values = exec.to_device(&[10_u32, 20, 21, 30, 31, 32]);
 
     let segments = segmentation.segments(values.slice(..)).unwrap();
+    assert_validated_segmentation(&segments);
     let observed_lengths = vector_map(&exec, segments, SliceLength).unwrap();
     assert_eq!(exec.to_host(&observed_lengths).unwrap(), vec![1, 2, 3]);
+
+    let mapped = ForEachSegment(Map(CastU64))
+        .run(&exec, segmentation.segments(values.slice(..)).unwrap())
+        .unwrap();
+    assert_validated_segmentation(&mapped);
 
     let values_y = exec.to_device(&[100_u32, 200, 201, 300, 301, 302]);
     let pair_segments = segmentation
@@ -527,6 +574,10 @@ fn segmentation_applies_to_values_and_broadcasts_multicolumn_context() {
     ));
     assert!(matches!(
         segmentation.segment_ids(&other),
+        Err(massively::Error::ForeignExecutor)
+    ));
+    assert!(matches!(
+        segmentation.local_indices(&other),
         Err(massively::Error::ForeignExecutor)
     ));
     assert!(matches!(
@@ -596,7 +647,7 @@ fn segmentation_context_is_composed_from_general_primitives() {
         .unwrap();
     assert_eq!(exec.to_host(empty_outputs.values()).unwrap(), vec![20, 21]);
     assert_eq!(
-        exec.to_host(empty_outputs.offsets()).unwrap(),
+        exec.to_host(&empty_outputs.offsets().offsets()).unwrap(),
         vec![0, 0, 2, 2]
     );
 
@@ -683,6 +734,57 @@ fn segmented_predicate_summaries_normalize_nonzero_flags() {
             massively::flag::from_bool(false)
         ]
     );
+}
+
+#[test]
+fn segmented_take_find_if_and_adjacent_find_cover_empty_segments() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    // [], [2, 4, 6], [1, 1, 3], [5], [7, 8, 8]
+    let values = exec.to_device(&[2_u32, 4, 6, 1, 1, 3, 5, 7, 8, 8]);
+    let offsets = exec.to_device(&[0_u32, 0, 3, 6, 7, 10]);
+
+    let taken = ForEachSegment(Take(2))
+        .run(
+            &exec,
+            SegmentIterator::new(values.slice(..), offsets.slice(..)),
+        )
+        .unwrap();
+    assert_eq!(
+        exec.to_host(taken.values()).unwrap(),
+        vec![2, 4, 1, 1, 5, 7, 8]
+    );
+    assert_eq!(
+        exec.to_host(&taken.offsets().offsets()).unwrap(),
+        vec![0, 0, 2, 4, 5, 7]
+    );
+
+    let taken_zero = ForEachSegment(Take(0))
+        .run(
+            &exec,
+            SegmentIterator::new(values.slice(..), offsets.slice(..)),
+        )
+        .unwrap();
+    assert_eq!(taken_zero.values().len(), 0);
+    assert_eq!(
+        exec.to_host(&taken_zero.offsets().offsets()).unwrap(),
+        vec![0, 0, 0, 0, 0, 0]
+    );
+
+    let found = ForEachSegment(FindIf(Even))
+        .run(
+            &exec,
+            SegmentIterator::new(values.slice(..), offsets.slice(..)),
+        )
+        .unwrap();
+    assert_eq!(exec.to_host(&found).unwrap(), vec![0, 0, 3, 1, 1]);
+
+    let adjacent = ForEachSegment(AdjacentFind(Equal))
+        .run(
+            &exec,
+            SegmentIterator::new(values.slice(..), offsets.slice(..)),
+        )
+        .unwrap();
+    assert_eq!(exec.to_host(&adjacent).unwrap(), vec![0, 3, 0, 1, 1]);
 }
 
 #[test]

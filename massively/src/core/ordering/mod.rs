@@ -11,13 +11,11 @@ use crate::{
     eval::Eval13,
     launch::cube_count_1d,
     op::IndexedBinaryOp,
-    output::{LowerOutputExpression, OutputExpression, StageOutput},
     read::{
         AdjacentIndexedTransform, Env0, Env13, KernelReadSlots, LowerReadExpression,
         PaddedReadSlots,
     },
     reduce::{ReduceDispatch, ReductionOp, StageRead, StagedBindings, reduce},
-    transform::{MaterializeDispatch, materialize},
 };
 
 pub(crate) mod sort;
@@ -890,65 +888,6 @@ where
     input.sort_control(exec)
 }
 
-/// Key-sort capability that also retains the stable source permutation.
-///
-/// Keys are moved by the storage-width sort itself.  Only the permutation is
-/// exposed to the independent value phase, so key and value arities never form
-/// one combined kernel ABI.
-#[doc(hidden)]
-pub trait SortKeysInput<R: Runtime, Less, Output>: ReadExpression + Sized {
-    fn sort_keys_into(
-        self,
-        exec: &Executor<R>,
-        output: Output,
-    ) -> Result<sort::OrderingControl<R>, Error>;
-}
-
-impl<R, Input, Less, Output> SortKeysInput<R, Less, Output> for Input
-where
-    R: Runtime,
-    Input: crate::allocation::NormalizeOwnedInput<R>,
-    Less: BinaryPredicateOp<Input::Item>,
-    Output: OutputExpression<Item = Input::Item> + LowerOutputExpression + StageOutput<R, Env0>,
-    Input::Item:
-        crate::RowAlloc<R, RowStorage = Input::OwnedStorage> + crate::api::iter::SortAbi<R>,
-    Dispatch<crate::A13, crate::S12>: MaterializeDispatch<
-            R,
-            Input::OwnedRead,
-            Output,
-            crate::read::KernelReadSlots<<Input::OwnedRead as LowerReadExpression>::Slots>,
-            crate::output::KernelOutputSlots<<Output as LowerOutputExpression>::Slots>,
-        >,
-    <Output as LowerOutputExpression>::Slots: crate::output::PaddedOutputSlots,
-{
-    fn sort_keys_into(
-        self,
-        exec: &Executor<R>,
-        output: Output,
-    ) -> Result<sort::OrderingControl<R>, Error> {
-        let temporary = self.normalize_owned(exec)?;
-        let result = <Input::Item as crate::api::iter::SortAbi<R>>::sort_storage::<Less>(
-            exec, temporary, true,
-        )?;
-        let semantic = Input::owned_read(&result.sorted_keys);
-        materialize(exec, semantic, output)?;
-        Ok(result.control)
-    }
-}
-
-pub(crate) fn sort_keys_with_control<R, Input, Less, Output>(
-    exec: &Executor<R>,
-    input: Input,
-    _less: Less,
-    output: Output,
-) -> Result<sort::OrderingControl<R>, Error>
-where
-    R: Runtime,
-    Input: SortKeysInput<R, Less, Output>,
-{
-    input.sort_keys_into(exec, output)
-}
-
 pub(crate) trait AdjacentFlagInput<R: Runtime, Op>: ReadExpression + Sized {
     fn adjacent_flags(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
     fn adjacent_flags_ordered(
@@ -1366,9 +1305,7 @@ mod tests {
         );
         let input = Permute::new(seven, Counting::new(0, len));
         let temporary = input.normalize_owned(&exec).unwrap();
-        let output = Seven::sort_storage::<LexicographicLess>(&exec, temporary, false)
-            .unwrap()
-            .sorted_keys;
+        let output = Seven::sort_storage::<LexicographicLess>(&exec, temporary).unwrap();
 
         let (keys, rows, payload2, _, _, _, payload6) = crate::MStorage::into_columns(output);
         let sorted_keys = exec.to_host(&keys).unwrap();

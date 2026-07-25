@@ -41,6 +41,10 @@ pub struct Count;
 #[doc(hidden)]
 pub struct StrideCount;
 
+/// Reads `(start + index) / divisor % modulus`.
+#[doc(hidden)]
+pub struct DivModCount;
+
 /// Reads a staged final index and subtracts the logical index.
 #[doc(hidden)]
 pub struct ReverseCount;
@@ -85,6 +89,13 @@ impl ReadMode<u32> for Count {
 impl ReadMode<u32> for StrideCount {
     fn read(slot: &[u32], offset: u32, index: usize) -> u32 {
         slot[0] + (offset + index as u32) * slot[1]
+    }
+}
+
+#[cubecl::cube]
+impl ReadMode<u32> for DivModCount {
+    fn read(slot: &[u32], offset: u32, index: usize) -> u32 {
+        (slot[0] + offset + index as u32) / slot[1] % slot[2]
     }
 }
 

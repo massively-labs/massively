@@ -56,8 +56,8 @@ macro_rules! set_api {
             Item: MAlloc<R>,
             Less: BinaryPredicateOp<Item>,
         {
-            let left_len = left.len()? as usize;
-            let right_len = right.len()? as usize;
+            let left_len = left.len()?;
+            let right_len = right.len()?;
             let capacity = ($capacity)(left_len, right_len)?;
             let output = exec.alloc::<Item>(capacity);
             let len = $into_name(exec, left, right, less, output.slice_mut(..))?;
@@ -96,9 +96,9 @@ set_api!(
     set_union,
     set_union_into,
     0,
-    |left: usize, right: usize| left
-        .checked_add(right)
-        .ok_or(Error::LengthTooLarge { len: usize::MAX }),
+    |left: MIndex, right: MIndex| left.checked_add(right).ok_or(Error::LengthTooLarge {
+        len: left as usize + right as usize,
+    }),
     r#"Computes the multiset union of two sorted ranges.
 
 # Examples
@@ -130,7 +130,7 @@ set_api!(
     set_intersection,
     set_intersection_into,
     1,
-    |left: usize, _right: usize| Ok(left),
+    |left: MIndex, _right: MIndex| Ok(left),
     r#"Computes the multiset intersection of two sorted ranges.
 
 # Examples
@@ -162,7 +162,7 @@ set_api!(
     set_difference,
     set_difference_into,
     2,
-    |left: usize, _right: usize| Ok(left),
+    |left: MIndex, _right: MIndex| Ok(left),
     r#"Computes the multiset difference of two sorted ranges.
 
 # Examples

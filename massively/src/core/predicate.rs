@@ -11,7 +11,6 @@ use crate::{
     read::{AdjacentIndexedTransform, Env0, Env1, IndexedTransform, LowerReadExpression},
     reduce::{ReduceDispatch, ReductionOp, StageRead, reduce},
     scan::{InclusiveScanDispatch, inclusive_scan},
-    transform::{MaterializeDispatch, transform},
 };
 
 /// Compile-time flag predicate applied to one semantic input item.
@@ -127,19 +126,6 @@ where
     }
 }
 
-#[cfg(test)]
-struct PartitionViolation;
-
-#[cfg(test)]
-#[cubecl::cube]
-impl UnaryOp<(u32, u32)> for PartitionViolation {
-    type Output = u32;
-
-    fn apply(input: (u32, u32)) -> u32 {
-        (1u32 - input.0) * input.1
-    }
-}
-
 /// Internal capability proving that the input has a supported predicate kernel.
 #[doc(hidden)]
 pub trait PredicateInput<R: Runtime, Pred>: ReadExpression + Sized {
@@ -147,7 +133,6 @@ pub trait PredicateInput<R: Runtime, Pred>: ReadExpression + Sized {
     fn predicate_first(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
     fn predicate_is_partitioned(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
     fn predicate_positions(self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error>;
-    fn predicate_flags(self, exec: &Executor<R>) -> Result<DeviceVec<R, MFlag>, Error>;
 }
 
 impl<R, Input, Pred> PredicateInput<R, Pred> for Input
@@ -157,16 +142,6 @@ where
     Pred: PredicateOp<Input::Item>,
     Transform<Input, PredicateMap<Pred>>:
         ReadExpression<Item = MFlag> + LowerReadExpression + StageRead<R, Env0>,
-    Dispatch<crate::A13, crate::S12>:
-        MaterializeDispatch<
-                R,
-                Transform<Input, PredicateMap<Pred>>,
-                DeviceSliceMut<MFlag>,
-                crate::read::KernelReadSlots<
-                    <Transform<Input, PredicateMap<Pred>> as LowerReadExpression>::Slots,
-                >,
-                crate::output::KernelOutputSlots<Env1<MFlag>>,
-            >,
     IndexedTransform<Input, FirstMatchingIndex<Pred>>:
         ReadExpression<Item = u32> + LowerReadExpression + StageRead<R, Env0>,
     Dispatch<crate::A13, crate::S12>:
@@ -261,19 +236,6 @@ where
         Ok(positions)
     }
 
-    fn predicate_flags(self, exec: &Executor<R>) -> Result<DeviceVec<R, MFlag>, Error> {
-        let len = self.logical_len()?;
-        let extent = self.logical_extent()?;
-        let mut flags = exec.alloc_row::<MFlag>(len);
-        flags.set_logical_extent(extent);
-        transform(
-            exec,
-            self,
-            PredicateMap::<Pred>(PhantomData),
-            flags.slice_mut(..),
-        )?;
-        Ok(flags)
-    }
 }
 
 /// Counts elements satisfying `pred`.
@@ -406,11 +368,6 @@ mod tests {
     fn predicate_consumers_normalize_nonzero_flags() {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[7_u32, 0, 3]);
-        let flags =
-            <_ as PredicateInput<WgpuRuntime, RawFlag>>::predicate_flags(input.column(), &exec)
-                .unwrap();
-
-        assert_eq!(exec.to_host(&flags).unwrap(), vec![1, 0, 1]);
         assert_eq!(
             count_if(&exec, input.column(), RawFlag)
                 .unwrap()
@@ -424,32 +381,6 @@ mod tests {
     fn partitioned_accepts_a_two_item_all_passing_range() {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[20_u32, 0]);
-        let flags =
-            <_ as PredicateInput<WgpuRuntime, IsEven>>::predicate_flags(input.column(), &exec)
-                .unwrap();
-        assert_eq!(exec.to_host(&flags).unwrap(), vec![1, 1]);
-        let violations = exec.alloc_row::<u32>(1);
-        transform(
-            &exec,
-            Zip::new(flags.slice(..1), flags.slice(1..)),
-            PartitionViolation,
-            violations.slice_mut(..),
-        )
-        .unwrap();
-        assert_eq!(exec.to_host(&violations).unwrap(), vec![0]);
-        let reduced = reduce(&exec, violations.column(), exec.to_device(&[0_u32]), SumU32).unwrap();
-        assert_eq!(exec.to_host(&reduced).unwrap(), vec![0]);
-        let reduced = reduce(
-            &exec,
-            Transform::new(
-                Zip::new(flags.slice(..1), flags.slice(1..)),
-                PartitionViolation,
-            ),
-            exec.to_device(&[0_u32]),
-            SumU32,
-        )
-        .unwrap();
-        assert_eq!(exec.to_host(&reduced).unwrap(), vec![0],);
         assert_eq!(
             is_partitioned(&exec, input.column(), IsEven)
                 .unwrap()

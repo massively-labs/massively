@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 use cubecl::prelude::{CubeType, Runtime};
-use std::ops::{Bound, RangeBounds};
+use std::ops::RangeBounds;
 
 use crate::core::iter::Zip;
 use crate::{Error, Executor, MIndex};
@@ -83,11 +83,7 @@ pub(crate) trait SortAbi<R: Runtime>: KernelRow + crate::RowAlloc<R> {
     fn sort_storage<Less>(
         exec: &Executor<R>,
         input: <Self as crate::RowAlloc<R>>::RowStorage,
-        carry_indices: bool,
-    ) -> Result<
-        crate::ordering::sort::OrderingResult<R, <Self as crate::RowAlloc<R>>::RowStorage>,
-        Error,
-    >
+    ) -> Result<<Self as crate::RowAlloc<R>>::RowStorage, Error>
     where
         Less: crate::op::BinaryPredicateOp<Self>;
 }
@@ -101,18 +97,14 @@ where
     fn sort_storage<Less>(
         exec: &Executor<R>,
         input: <Self as crate::RowAlloc<R>>::RowStorage,
-        carry_indices: bool,
-    ) -> Result<
-        crate::ordering::sort::OrderingResult<R, <Self as crate::RowAlloc<R>>::RowStorage>,
-        Error,
-    >
+    ) -> Result<<Self as crate::RowAlloc<R>>::RowStorage, Error>
     where
         Less: crate::op::BinaryPredicateOp<Self>,
     {
         <<Self as crate::StorageLayout>::StorageLeaves as crate::ordering::sort::SortLeaves<
             R,
             Self,
-        >>::sort_storage::<Less>(exec, input, carry_indices)
+        >>::sort_storage::<Less>(exec, input)
     }
 }
 
@@ -125,10 +117,6 @@ pub(crate) trait ItemDispatch<R: Runtime> {
     fn store_value(exec: &Executor<R>, value: Self::Item) -> Result<Self::Storage, Error>;
 
     fn read_value(exec: &Executor<R>, storage: &Self::Storage) -> Result<Self::Item, Error>;
-
-    fn scratch_ref(
-        storage: &Self::Storage,
-    ) -> &<Self::Item as crate::allocation::ScratchStorage<R>>::Storage;
 
     fn into_scratch(
         storage: Self::Storage,
@@ -177,12 +165,6 @@ where
         crate::RowStorage::read_first(storage, exec)
     }
 
-    fn scratch_ref(
-        storage: &Self::Storage,
-    ) -> &<Item as crate::allocation::ScratchStorage<R>>::Storage {
-        storage
-    }
-
     fn into_scratch(
         storage: Self::Storage,
     ) -> <Item as crate::allocation::ScratchStorage<R>>::Storage {
@@ -213,35 +195,8 @@ where
     {
         let input = lower_fixed::<R, _>(input);
         let temporary = crate::allocation::NormalizeOwnedInput::normalize_owned(input, exec)?;
-        let result = Item::sort_storage::<Less>(exec, temporary, false)?;
-        Ok(result.sorted_keys)
+        Item::sort_storage::<Less>(exec, temporary)
     }
-}
-
-pub(crate) fn resolve_iter_range<Bounds>(len: usize, range: Bounds) -> (usize, usize)
-where
-    Bounds: RangeBounds<MIndex>,
-{
-    let logical_len = MIndex::try_from(len).expect("iterator length does not fit in MIndex");
-    let start = match range.start_bound() {
-        Bound::Included(&start) => start,
-        Bound::Excluded(&start) => start.checked_add(1).expect("slice start overflow"),
-        Bound::Unbounded => 0,
-    };
-    let end = match range.end_bound() {
-        Bound::Included(&end) => end.checked_add(1).expect("slice end overflow"),
-        Bound::Excluded(&end) => end,
-        Bound::Unbounded => logical_len,
-    };
-    assert!(
-        start <= end,
-        "slice start ({start}) is greater than slice end ({end})"
-    );
-    assert!(
-        end <= logical_len,
-        "slice end ({end}) is out of bounds for iterator of length {logical_len}"
-    );
-    (start as usize, (end - start) as usize)
 }
 
 pub(crate) fn logical_len(len: usize) -> Result<MIndex, Error> {
@@ -304,7 +259,7 @@ where
     R: Runtime,
     Input: MIter<R, Item = u32>,
 {
-    let output = exec.alloc::<u32>(len as usize);
+    let output = exec.alloc::<u32>(len);
     let input = lower_fixed::<R, _>(input);
     let output_view = output.slice_mut(..);
     crate::transform::materialize_fixed(exec, &input, &output_view)?;
@@ -338,7 +293,7 @@ where
         return Ok(storage);
     }
 
-    let output = exec.alloc::<Item>(len as usize);
+    let output = exec.alloc::<Item>(len);
     crate::api::algorithm::transform::copy(exec, storage.slice(..len), output.slice_mut(..))?;
     Ok(output)
 }
@@ -576,9 +531,7 @@ pub trait MIter<R: Runtime>: Clone + Sized {
 
     /// Exact-arity device read plan for this iterator.
     #[doc(hidden)]
-    type Read: private::KernelInput<R, Item = Self::Item>
-        + private::IterLength
-        + crate::read::SliceExpression;
+    type Read: private::KernelInput<R, Item = Self::Item> + crate::read::SliceExpression;
 
     #[doc(hidden)]
     type Slice;
@@ -692,7 +645,6 @@ impl<R, Input, Item> MIter<R> for Input
 where
     R: Runtime,
     Input: Clone
-        + private::IterLength
         + private::KernelInput<R, Item = Item>
         + crate::read::SliceExpression
         + crate::read::LowerReadExpression,
@@ -706,18 +658,18 @@ where
     where
         Bounds: RangeBounds<MIndex>,
     {
-        let len = private::IterLength::logical_len(self)
+        let len = private::logical_len::<R, _>(self)
             .expect("cannot slice an iterator with an invalid length");
-        let (start, len) = resolve_iter_range(len, range);
+        let (start, len) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(self.slice_expression(start, len))
     }
 
     fn capacity(&self) -> Result<MIndex, Error> {
-        logical_len(private::IterLength::logical_len(self)?)
+        logical_len(private::logical_len::<R, _>(self)?)
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        private::IterLength::logical_extent(self)
+        private::logical_extent::<R, _>(self)
     }
 
     fn lower_read(self) -> Self::Read {
@@ -753,7 +705,7 @@ where
     {
         let len = crate::output::OutputExpression::logical_len(self)
             .expect("cannot slice an output with an invalid length");
-        let (start, len) = resolve_iter_range(len, range);
+        let (start, len) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(self.slice_read(start..start + len))
     }
 
@@ -763,7 +715,7 @@ where
     {
         let len = crate::output::OutputExpression::logical_len(self)
             .expect("cannot slice an output with an invalid length");
-        let (start, len) = resolve_iter_range(len, range);
+        let (start, len) = crate::read::resolve_mindex_slice_range(len, range);
         crate::output::Slice::new(self.slice_output(start..start + len))
     }
 
@@ -816,9 +768,7 @@ impl<R, Storage> MIter<R> for StorageSlice<'_, R, Storage>
 where
     R: Runtime,
     Storage: crate::RowStorage<R>,
-    Storage::Read: private::KernelInput<R, Item = Storage::Item>
-        + private::IterLength
-        + crate::read::SliceExpression,
+    Storage::Read: private::KernelInput<R, Item = Storage::Item> + crate::read::SliceExpression,
 {
     type Item = Storage::Item;
     type Read = Storage::Read;
@@ -828,7 +778,7 @@ where
     where
         Bounds: RangeBounds<MIndex>,
     {
-        let (start, len) = resolve_iter_range(self.len, range);
+        let (start, len) = crate::read::resolve_mindex_slice_range(self.len, range);
         Self::new(self.storage, self.start + start, len)
     }
 
@@ -837,7 +787,7 @@ where
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        private::IterLength::logical_extent(&self.clone().lower_read())
+        private::logical_extent::<R, _>(&self.clone().lower_read())
     }
 
     fn lower_read(self) -> Self::Read {
@@ -878,9 +828,7 @@ where
     R: Runtime,
     Storage: crate::RowStorage<R>,
     Storage::Item: KernelRow + crate::core::allocation::ScratchStorage<R>,
-    Storage::Read: private::KernelInput<R, Item = Storage::Item>
-        + private::IterLength
-        + crate::read::SliceExpression,
+    Storage::Read: private::KernelInput<R, Item = Storage::Item> + crate::read::SliceExpression,
     Storage::Write:
         ReadOutput + private::KernelOutput<R> + crate::selection::FillOutput<R> + SliceOutput,
     Storage::WriteSlots: crate::output::OutputSlotEnvironment<
@@ -897,7 +845,7 @@ where
     where
         Bounds: RangeBounds<MIndex>,
     {
-        let (start, len) = resolve_iter_range(self.len, range);
+        let (start, len) = crate::read::resolve_mindex_slice_range(self.len, range);
         StorageSlice::new(self.storage, self.start + start, len)
     }
 
@@ -905,7 +853,7 @@ where
     where
         Bounds: RangeBounds<MIndex>,
     {
-        let (start, len) = resolve_iter_range(self.len, range);
+        let (start, len) = crate::read::resolve_mindex_slice_range(self.len, range);
         Self::new(self.storage, self.start + start, len)
     }
 
@@ -939,10 +887,6 @@ impl<Left, Right> Zipped<Left, Right> {
     pub(crate) const fn new(left: Left, right: Right) -> Self {
         Self(left, right)
     }
-
-    pub(crate) fn into_parts(self) -> (Left, Right) {
-        (self.0, self.1)
-    }
 }
 
 impl<R, Left, Right> MIter<R> for Zipped<Left, Right>
@@ -950,8 +894,7 @@ where
     R: Runtime,
     Left: MIter<R>,
     Right: MIter<R>,
-    Zip<Left::Read, Right::Read>:
-        private::KernelInput<R> + private::IterLength + crate::read::SliceExpression,
+    Zip<Left::Read, Right::Read>: private::KernelInput<R> + crate::read::SliceExpression,
 {
     type Item = <Zip<Left::Read, Right::Read> as crate::ReadExpression>::Item;
     type Read = Zip<Left::Read, Right::Read>;
@@ -962,9 +905,8 @@ where
         Bounds: RangeBounds<MIndex>,
     {
         let input = self.clone().lower_read();
-        let len =
-            private::IterLength::logical_len(&input).expect("zip operands have equal lengths");
-        let (start, count) = resolve_iter_range(len, range);
+        let len = private::logical_len::<R, _>(&input).expect("zip operands have equal lengths");
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
@@ -1030,7 +972,7 @@ where
         );
         let len = crate::output::OutputExpression::logical_len(&output)
             .expect("zip outputs have equal lengths");
-        let (start, count) = resolve_iter_range(len, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(output.slice_read(start..start + count))
     }
 
@@ -1044,7 +986,7 @@ where
         );
         let len = crate::output::OutputExpression::logical_len(&output)
             .expect("zip outputs have equal lengths");
-        let (start, count) = resolve_iter_range(len, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
         crate::output::Slice::new(output.slice_output(start..start + count))
     }
 

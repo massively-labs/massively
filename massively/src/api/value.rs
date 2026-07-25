@@ -49,15 +49,6 @@ where
         self.storage
     }
 
-    pub(crate) fn scratch_storage(&self) -> &<T as crate::allocation::ScratchStorage<R>>::Storage
-    where
-        T: crate::allocation::ScratchStorage<R>,
-    {
-        <<T as MAlloc<R>>::Dispatch as crate::api::iter::ItemDispatch<R>>::scratch_ref(
-            &self.storage,
-        )
-    }
-
     pub(crate) fn into_scratch_storage(self) -> <T as crate::allocation::ScratchStorage<R>>::Storage
     where
         T: crate::allocation::ScratchStorage<R>,

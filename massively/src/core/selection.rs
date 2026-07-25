@@ -12,7 +12,7 @@ use crate::{
     reduce::{ReductionOp, StageRead},
     scan::{InclusiveScanDispatch, inclusive_scan, inclusive_scan_u32, last_u32},
     storage::Concat,
-    transform::{MaterializeDispatch, materialize},
+    transform::materialize,
 };
 
 const BLOCK_SIZE: u32 = 256;
@@ -97,13 +97,6 @@ where
     Constant<T>: ReadExpression<Item = T, ReadArity = A1>
         + LowerReadExpression<Slots = Env1<T>>
         + StageRead<R, Env0>,
-    Dispatch<crate::A13, crate::S12>: MaterializeDispatch<
-            R,
-            Constant<T>,
-            DeviceSliceMut<T>,
-            crate::read::KernelReadSlots<Env1<T>>,
-            crate::output::KernelOutputSlots<Env1<T>>,
-        >,
     DeviceSliceMut<T>: OutputExpression<Item = T, StorageArity = S1>
         + LowerOutputExpression<Slots = Env1<T>>
         + StageOutput<R, Env0>,

@@ -61,7 +61,7 @@ pub(crate) trait FillValue<R: Runtime>: Sized {
 
 impl<R: Runtime> FillValue<R> for u32 {
     fn filled(exec: &Executor<R>, len: usize, value: Self) -> Result<DeviceVec<R, Self>> {
-        let output = exec.alloc::<u32>(len);
+        let output = exec.alloc::<u32>(len.try_into().unwrap());
         vector::fill(exec, value, output.slice_mut(..))?;
         Ok(output)
     }
@@ -69,7 +69,7 @@ impl<R: Runtime> FillValue<R> for u32 {
 
 impl<R: Runtime> FillValue<R> for f32 {
     fn filled(exec: &Executor<R>, len: usize, value: Self) -> Result<DeviceVec<R, Self>> {
-        let output = exec.alloc::<f32>(len);
+        let output = exec.alloc::<f32>(len.try_into().unwrap());
         vector::fill(exec, value, output.slice_mut(..))?;
         Ok(output)
     }

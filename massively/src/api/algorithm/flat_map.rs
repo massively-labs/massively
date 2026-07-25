@@ -65,16 +65,16 @@ where
     Op::Output: MAlloc<R>,
 {
     let _ = op;
-    let input_len = input.len()? as usize;
-    let offset_count = input_len
-        .checked_add(1)
-        .ok_or(Error::LengthTooLarge { len: input_len })?;
+    let input_len = input.len()?;
+    let offset_count = input_len.checked_add(1).ok_or(Error::LengthTooLarge {
+        len: input_len as usize + 1,
+    })?;
 
     let counts: DeviceVec<R, u32> =
         crate::vector::map(exec, input.clone(), Count::<Op>(PhantomData))?;
     let positions = crate::scan::inclusive_scan_u32(exec, &counts)?;
-    let output_len = MVal::<R, u32>::from_storage(crate::scan::last_u32(exec, &positions)?)?
-        .read(exec)? as usize;
+    let output_len =
+        MVal::<R, u32>::from_storage(crate::scan::last_u32(exec, &positions)?)?.read(exec)?;
 
     let element_offsets = exec.alloc::<u32>(offset_count);
     crate::vector::fill(exec, 0u32, element_offsets.slice_mut(..1))?;
@@ -85,7 +85,7 @@ where
     let control = crate::seg::control::SegmentControl::from_materialized(
         exec,
         element_offsets.clone(),
-        output_len,
+        output_len as usize,
     )?;
     let owners = control.ids(exec)?;
     let output = exec.alloc::<Op::Output>(output_len);

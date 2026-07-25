@@ -89,13 +89,6 @@ fn min_extent_kernel(left: &[u32], right: &[u32], output: &mut [u32]) {
 }
 
 #[cubecl::cube(launch_unchecked)]
-fn extent_equal_kernel(left: &[u32], right: &[u32], output: &mut [u32]) {
-    if ABSOLUTE_POS == 0 {
-        output[0] = crate::flag::from_bool(left[0] == right[0]);
-    }
-}
-
-#[cubecl::cube(launch_unchecked)]
 fn extent_less_kernel(left: &[u32], right: &[u32], output: &mut [u32]) {
     if ABSOLUTE_POS == 0 {
         output[0] = crate::flag::from_bool(left[0] < right[0]);
@@ -317,60 +310,28 @@ impl LogicalExtent {
         Ok(Self::from_device(&output, upper_bound))
     }
 
-    fn compare<R: Runtime>(
-        exec: &Executor<R>,
-        left: &Self,
-        right: &Self,
-        less: bool,
-    ) -> Result<DeviceVec<R, u32>, Error> {
-        if let (Some(left), Some(right)) = (left.host_len(), right.host_len()) {
-            return Ok(exec.to_device(&[u32::from(if less {
-                left < right
-            } else {
-                left == right
-            })]));
-        }
-        let left = left.materialize(exec)?;
-        let right = right.materialize(exec)?;
-        let output = exec.alloc_column::<u32>(1);
-        unsafe {
-            if less {
-                extent_less_kernel::launch_unchecked::<R>(
-                    exec.client(),
-                    CubeCount::Static(1, 1, 1),
-                    CubeDim::new_1d(1),
-                    BufferArg::from_raw_parts(left.handle.clone(), 1),
-                    BufferArg::from_raw_parts(right.handle.clone(), 1),
-                    BufferArg::from_raw_parts(output.handle.clone(), 1),
-                );
-            } else {
-                extent_equal_kernel::launch_unchecked::<R>(
-                    exec.client(),
-                    CubeCount::Static(1, 1, 1),
-                    CubeDim::new_1d(1),
-                    BufferArg::from_raw_parts(left.handle.clone(), 1),
-                    BufferArg::from_raw_parts(right.handle.clone(), 1),
-                    BufferArg::from_raw_parts(output.handle.clone(), 1),
-                );
-            }
-        }
-        Ok(output)
-    }
-
-    pub(crate) fn equal_value<R: Runtime>(
-        exec: &Executor<R>,
-        left: &Self,
-        right: &Self,
-    ) -> Result<DeviceVec<R, u32>, Error> {
-        Self::compare(exec, left, right, false)
-    }
-
     pub(crate) fn less_value<R: Runtime>(
         exec: &Executor<R>,
         left: &Self,
         right: &Self,
     ) -> Result<DeviceVec<R, u32>, Error> {
-        Self::compare(exec, left, right, true)
+        if let (Some(left), Some(right)) = (left.host_len(), right.host_len()) {
+            return Ok(exec.to_device(&[crate::flag::from_bool(left < right)]));
+        }
+        let left = left.materialize(exec)?;
+        let right = right.materialize(exec)?;
+        let output = exec.alloc_column::<u32>(1);
+        unsafe {
+            extent_less_kernel::launch_unchecked::<R>(
+                exec.client(),
+                CubeCount::Static(1, 1, 1),
+                CubeDim::new_1d(1),
+                BufferArg::from_raw_parts(left.handle.clone(), 1),
+                BufferArg::from_raw_parts(right.handle.clone(), 1),
+                BufferArg::from_raw_parts(output.handle.clone(), 1),
+            );
+        }
+        Ok(output)
     }
 
     pub(crate) fn copy_value<R: Runtime>(

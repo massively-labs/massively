@@ -52,3 +52,15 @@ fn slice_bounds_are_mindex_values() {
     assert_eq!(MIter::<WgpuRuntime>::len(&lazy).unwrap(), 3);
     assert_eq!(exec.to_host(&read).unwrap(), vec![20, 30, 40]);
 }
+
+#[test]
+fn allocation_lengths_are_mindex_values() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let len: MIndex = 3;
+
+    let allocated = exec.alloc::<u32>(len);
+    let filled = exec.full(len, 7_u32).unwrap();
+
+    assert_eq!(allocated.len(), len);
+    assert_eq!(exec.to_host(&filled).unwrap(), vec![7, 7, 7]);
+}

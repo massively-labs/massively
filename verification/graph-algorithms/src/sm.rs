@@ -202,12 +202,11 @@ pub fn solve<R: Runtime>(
     )?;
     let sorted_pairs = vector::sort(exec, edge_pairs.slice(..), PairLess)?;
     let edge_count = sorted_pairs.len()?;
-    let searchable_len =
-        (edge_count as usize)
-            .checked_add(1)
-            .ok_or(massively::Error::LengthTooLarge {
-                len: edge_count as usize,
-            })?;
+    let searchable_len = edge_count
+        .checked_add(1)
+        .ok_or(massively::Error::LengthTooLarge {
+            len: edge_count as usize + 1,
+        })?;
     let searchable = exec.alloc::<(u32, u32)>(searchable_len);
     vector::scatter(
         exec,

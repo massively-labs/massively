@@ -7,8 +7,8 @@ use cubecl::prelude::*;
 
 use crate::allocation::CopyStorage;
 use crate::{
-    A13, Column, Constant, Counting, Error, Executor, MStorageElement, Permute, ReadExpression,
-    ReverseCounting, RowStorage, S12, StorageLayout, Stride, Taken, Transform, Zip,
+    A13, Column, Constant, Counting, DivModCounting, Error, Executor, MStorageElement, Permute,
+    ReadExpression, ReverseCounting, RowStorage, S12, StorageLayout, Stride, Taken, Transform, Zip,
     eval::Eval13,
     launch::cube_count_1d,
     op::UnaryOp,
@@ -65,17 +65,6 @@ pub trait ReductionOp<Item: CubeType>: 'static + Send + Sync {
 }
 
 /// Semantic items supported by the first single-leaf reduction slice.
-#[cfg(any())]
-pub trait ReduceStorage1:
-    MStorageElement + StorageLayout<StorageArity = S1> + Send + Sync + 'static
-{
-}
-
-#[cfg(any())]
-impl<T> ReduceStorage1 for T where
-    T: MStorageElement + StorageLayout<StorageArity = S1> + Send + Sync + 'static
-{
-}
 
 /// Dispatch key combining read arity and reduction storage arity.
 #[derive(Clone, Copy, Debug, Default)]
@@ -147,62 +136,6 @@ where
         offset.store(offset.read() / 2u32);
     }
     (Leaves::read(&cells), cell_valid.read())
-}
-
-#[cfg(any())]
-#[cubecl::cube]
-fn finish_storage1_workgroup<Item, Op>(
-    value: Item,
-    valid: u32,
-    plane_values: &mut Shared<[Item]>,
-    plane_valid: &mut Shared<[u32]>,
-    partials: &mut [Item],
-) where
-    Item: CubePrimitive,
-    Op: ReductionOp<Item>,
-{
-    if UNIT_POS_PLANE == 0u32 {
-        plane_values[PLANE_POS as usize] = value;
-        plane_valid[PLANE_POS as usize] = valid;
-    }
-    sync_cube();
-
-    if PLANE_POS == 0u32 {
-        let plane_count = (CUBE_DIM + PLANE_DIM - 1u32) / PLANE_DIM;
-        let lane = UNIT_POS_PLANE;
-        let source = if lane < plane_count {
-            UNIT_POS_PLANE as usize
-        } else {
-            0usize
-        };
-        let source_valid = if lane < plane_count {
-            plane_valid[source]
-        } else {
-            0u32
-        };
-        let accumulator = RuntimeCell::<Item>::new(plane_values[source]);
-        let accumulator_valid = RuntimeCell::<u32>::new(source_valid);
-        let cursor = RuntimeCell::<u32>::new(lane + PLANE_DIM);
-        while cursor.read() < plane_count {
-            let index = cursor.read() as usize;
-            if plane_valid[index] != 0u32 {
-                if accumulator_valid.read() != 0u32 {
-                    accumulator.store(Op::apply(accumulator.read(), plane_values[index]));
-                } else {
-                    accumulator.store(plane_values[index]);
-                    accumulator_valid.store(1u32);
-                }
-            }
-            cursor.store(cursor.read() + PLANE_DIM);
-        }
-        let result = reduce_plane_valid::<Item, Last<Item>, ScalarLayout<Item>, Op>(
-            accumulator.read(),
-            accumulator_valid.read(),
-        );
-        if UNIT_POS_PLANE == 0u32 && result.1 != 0u32 {
-            partials[CUBE_POS as usize] = result.0.value;
-        }
-    }
 }
 
 #[doc(hidden)]
@@ -349,6 +282,31 @@ macro_rules! impl_leaf_staging {
             }
         }
 
+        impl<R, $( $env_ty ),*> StageRead<R, $env> for DivModCounting
+        where
+            R: Runtime,
+            DivModCounting: BindSlots<$env>,
+        {
+            fn logical_len(&self) -> Result<usize, Error> {
+                Ok(self.len)
+            }
+
+            fn stage_at(
+                &self,
+                client: &ComputeClient<R>,
+                _owner: u64,
+                bindings: &mut StagedBindings,
+            ) -> Result<(), Error> {
+                let handle = client.create_from_slice(u32::as_bytes(&[
+                    self.start,
+                    self.divisor,
+                    self.modulus,
+                ]));
+                bindings.push(handle, 3, 0);
+                Ok(())
+            }
+        }
+
         impl<R, $( $env_ty ),*> StageRead<R, $env> for ReverseCounting
         where
             R: Runtime,
@@ -449,7 +407,7 @@ where
     crate::seg::SegmentRead<Values, Offsets>: BindSlots<Env>,
 {
     fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.offsets().logical_len()?.saturating_sub(1))
+        crate::seg::segment_count(self.offsets().logical_len()?)
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
@@ -653,249 +611,6 @@ where
         bindings.push(start.handle.clone(), 1, 0);
         Ok(())
     }
-}
-
-#[cfg(any())]
-mod legacy_storage1_reduce {
-    use super::*;
-
-    macro_rules! define_reduce_eval_storage1_kernel {
-    ($name:ident, $eval:ident, $method:ident; $( $leaf:ident : $slot:ident ),+ $(,)?) => {
-        #[cubecl::cube(launch_unchecked, explicit_define)]
-        fn $name<
-            Item: CubePrimitive,
-            $( $leaf: CubePrimitive, )+
-            Expr: $eval<Item, $( $leaf ),+>,
-            Op: ReductionOp<Item>,
-        >(
-            $( $slot: &[$leaf], )+
-            offsets: &[u32],
-            len: &[u32],
-            partials: &mut [Item],
-        ) {
-            let unit = UNIT_POS as usize;
-            let cube_dim = BLOCK_SIZE as usize;
-            let logical_len = len[0] as usize;
-            let mut plane_values = Shared::<[Item]>::new_slice(cube_dim);
-            let mut plane_valid = Shared::<[u32]>::new_slice(cube_dim);
-            let tile_start = (CUBE_POS as usize) * TILE_SIZE;
-            let first_index = tile_start + unit;
-            let safe_index = if logical_len == 0usize {
-                0usize
-            } else if first_index < logical_len {
-                first_index
-            } else {
-                logical_len - 1usize
-            };
-            let accumulator = RuntimeCell::<Item>::new(
-                Expr::$method($( $slot, )+ offsets, safe_index),
-            );
-
-            if tile_start + TILE_SIZE <= logical_len {
-                for item in 1usize..ITEMS_PER_UNIT {
-                    let value = Expr::$method(
-                        $( $slot, )+
-                        offsets,
-                        first_index + item * cube_dim,
-                    );
-                    accumulator.store(Op::apply(accumulator.read(), value));
-                }
-                let result = reduce_plane_full::<Item, Last<Item>, ScalarLayout<Item>, Op>(
-                    accumulator.read(),
-                );
-                finish_storage1_workgroup::<Item, Op>(
-                    result.value,
-                    1u32,
-                    &mut plane_values,
-                    &mut plane_valid,
-                    partials,
-                );
-            } else {
-                for item in 1usize..ITEMS_PER_UNIT {
-                    let index = first_index + item * cube_dim;
-                    if index < logical_len {
-                        let value = Expr::$method($( $slot, )+ offsets, index);
-                        accumulator.store(Op::apply(accumulator.read(), value));
-                    }
-                }
-                let result = reduce_plane_valid::<Item, Last<Item>, ScalarLayout<Item>, Op>(
-                    accumulator.read(),
-                    if first_index < logical_len { 1u32 } else { 0u32 },
-                );
-                finish_storage1_workgroup::<Item, Op>(
-                    result.0.value,
-                    result.1,
-                    &mut plane_values,
-                    &mut plane_valid,
-                    partials,
-                );
-            }
-        }
-    };
-}
-
-    #[cfg(any())]
-    mod unused_variable_arity_scalar_reduce_kernels {
-        use super::*;
-
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval1_storage1_partials_kernel,
-            Eval1,
-            eval1;
-            L0: slot0
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval2_storage1_partials_kernel,
-            Eval2,
-            eval2;
-            L0: slot0,
-            L1: slot1
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval3_storage1_partials_kernel,
-            Eval3,
-            eval3;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval4_storage1_partials_kernel,
-            Eval4,
-            eval4;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval5_storage1_partials_kernel,
-            Eval5,
-            eval5;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval6_storage1_partials_kernel,
-            Eval6,
-            eval6;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4,
-            L5: slot5
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval7_storage1_partials_kernel,
-            Eval7,
-            eval7;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4,
-            L5: slot5,
-            L6: slot6
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval8_storage1_partials_kernel,
-            Eval8,
-            eval8;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4,
-            L5: slot5,
-            L6: slot6,
-            L7: slot7
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval9_storage1_partials_kernel,
-            Eval9,
-            eval9;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4,
-            L5: slot5,
-            L6: slot6,
-            L7: slot7,
-            L8: slot8
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval10_storage1_partials_kernel,
-            Eval10,
-            eval10;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4,
-            L5: slot5,
-            L6: slot6,
-            L7: slot7,
-            L8: slot8,
-            L9: slot9
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval11_storage1_partials_kernel,
-            Eval11,
-            eval11;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4,
-            L5: slot5,
-            L6: slot6,
-            L7: slot7,
-            L8: slot8,
-            L9: slot9,
-            L10: slot10
-        );
-        define_reduce_eval_storage1_kernel!(
-            reduce_eval12_storage1_partials_kernel,
-            Eval12,
-            eval12;
-            L0: slot0,
-            L1: slot1,
-            L2: slot2,
-            L3: slot3,
-            L4: slot4,
-            L5: slot5,
-            L6: slot6,
-            L7: slot7,
-            L8: slot8,
-            L9: slot9,
-            L10: slot10,
-            L11: slot11
-        );
-    }
-
-    define_reduce_eval_storage1_kernel!(
-        reduce_eval13_storage1_partials_kernel,
-        Eval13,
-        eval13;
-        L0: slot0,
-        L1: slot1,
-        L2: slot2,
-        L3: slot3,
-        L4: slot4,
-        L5: slot5,
-        L6: slot6,
-        L7: slot7,
-        L8: slot8,
-        L9: slot9,
-        L10: slot10,
-        L11: slot11,
-        L12: slot12
-    );
 }
 
 #[cubecl::cube]
@@ -1137,344 +852,8 @@ macro_rules! define_padded_reduce_eval_kernel {
 
 define_padded_reduce_eval_kernel!(padded_reduce_a13,Eval13,eval13; [L0:slot0,L1:slot1,L2:slot2,L3:slot3,L4:slot4,L5:slot5,L6:slot6,L7:slot7,L8:slot8,L9:slot9,L10:slot10,L11:slot11,L12:slot12]);
 
-#[cfg(any())]
-mod legacy_storage_reduce {
-    use super::*;
-
-    macro_rules! define_storage_reduce_kernel {
-    ($name:ident,$load_trait:ident,$store_trait:ident; [$first_out:ident:$first_input:ident:$first_partial:ident:$first_shared:ident $(, $out_ty:ident:$input:ident:$partial:ident:$shared:ident )*]) => {
-        #[cubecl::cube(launch_unchecked, explicit_define)]
-        fn $name<
-            Item: CubeType + Send + Sync + 'static,
-            $first_out: CubePrimitive,
-            $( $out_ty: CubePrimitive, )*
-            Leaves: CubeType + Send + Sync + 'static
-                + $load_trait<$first_out, $( $out_ty ),*>
-                + $store_trait<$first_out, $( $out_ty ),*>
-                + MutableLeaves
-                + PlaneShuffleLeaves,
-            Layout: Decompose<Item, Leaves = Leaves> + Recompose<Item, Leaves = Leaves>,
-            Op: ReductionOp<Item>,
-        >(
-            $first_input: &[$first_out],
-            $( $input: &[$out_ty], )*
-            len: &[u32],
-            zero_offsets: &[u32],
-            $first_partial: &mut [$first_out],
-            $( $partial: &mut [$out_ty], )*
-        ) {
-            let unit = UNIT_POS as usize;
-            let cube_dim = BLOCK_SIZE as usize;
-            let logical_len = len[0] as usize;
-            let mut $first_shared = Shared::<[$first_out]>::new_slice(cube_dim);
-            $( let mut $shared = Shared::<[$out_ty]>::new_slice(cube_dim); )*
-            let mut plane_valid = Shared::<[u32]>::new_slice(cube_dim);
-            let tile_start = (CUBE_POS as usize) * TILE_SIZE;
-            let first_index = tile_start + unit;
-            let safe_index = if first_index < logical_len {
-                first_index
-            } else {
-                logical_len - 1usize
-            };
-            let accumulator = Leaves::load(
-                $first_input,
-                $( $input, )*
-                zero_offsets,
-                safe_index,
-            ).into_cells();
-
-            if tile_start + TILE_SIZE <= logical_len {
-                for item in 1usize..ITEMS_PER_UNIT {
-                    let value = Layout::recompose(Leaves::load(
-                        $first_input,
-                        $( $input, )*
-                        zero_offsets,
-                        first_index + item * cube_dim,
-                    ));
-                    accumulate_register::<Item, Leaves, Layout, Op>(&accumulator, value);
-                }
-                let result = reduce_plane_full::<Item, Leaves, Layout, Op>(
-                    Layout::recompose(Leaves::read(&accumulator)),
-                );
-                if UNIT_POS_PLANE == 0u32 {
-                    result.store(
-                        &mut $first_shared,
-                        $( &mut $shared, )*
-                        zero_offsets,
-                        PLANE_POS as usize,
-                    );
-                    plane_valid[PLANE_POS as usize] = 1u32;
-                }
-                sync_cube();
-
-                if PLANE_POS == 0u32 {
-                    let plane_count = (CUBE_DIM + PLANE_DIM - 1u32) / PLANE_DIM;
-                    let source = if UNIT_POS_PLANE < plane_count {
-                        UNIT_POS_PLANE as usize
-                    } else {
-                        0usize
-                    };
-                    let source_valid = if UNIT_POS_PLANE < plane_count {
-                        plane_valid[source]
-                    } else {
-                        0u32
-                    };
-                    let source_value = Layout::recompose(Leaves::load(
-                        &$first_shared,
-                        $( &$shared, )*
-                        zero_offsets,
-                        source,
-                    ));
-                    let block_accumulator = Layout::decompose(source_value).into_cells();
-                    let block_valid = RuntimeCell::<u32>::new(source_valid);
-                    let cursor = RuntimeCell::<u32>::new(UNIT_POS_PLANE + PLANE_DIM);
-                    while cursor.read() < plane_count {
-                        let index = cursor.read() as usize;
-                        if block_valid.read() != 0u32 && plane_valid[index] != 0u32 {
-                            let value = Layout::recompose(Leaves::load(
-                                &$first_shared,
-                                $( &$shared, )*
-                                zero_offsets,
-                                index,
-                            ));
-                            accumulate_register::<Item, Leaves, Layout, Op>(
-                                &block_accumulator,
-                                value,
-                            );
-                        }
-                        cursor.store(cursor.read() + PLANE_DIM);
-                    }
-                    let block_result = reduce_plane_valid::<Item, Leaves, Layout, Op>(
-                        Layout::recompose(Leaves::read(&block_accumulator)),
-                        block_valid.read(),
-                    );
-                    if UNIT_POS_PLANE == 0u32 && block_result.1 != 0u32 {
-                        block_result.0.store(
-                            $first_partial,
-                            $( $partial, )*
-                            zero_offsets,
-                            CUBE_POS as usize,
-                        );
-                    }
-                }
-            } else {
-                for item in 1usize..ITEMS_PER_UNIT {
-                    let index = first_index + item * cube_dim;
-                    if index < logical_len {
-                        let value = Layout::recompose(Leaves::load(
-                            $first_input,
-                            $( $input, )*
-                            zero_offsets,
-                            index,
-                        ));
-                        accumulate_register::<Item, Leaves, Layout, Op>(&accumulator, value);
-                    }
-                }
-                let result = reduce_plane_valid::<Item, Leaves, Layout, Op>(
-                    Layout::recompose(Leaves::read(&accumulator)),
-                    if first_index < logical_len { 1u32 } else { 0u32 },
-                );
-                if UNIT_POS_PLANE == 0u32 {
-                    result.0.store(
-                        &mut $first_shared,
-                        $( &mut $shared, )*
-                        zero_offsets,
-                        PLANE_POS as usize,
-                    );
-                    plane_valid[PLANE_POS as usize] = result.1;
-                }
-                sync_cube();
-
-                if PLANE_POS == 0u32 {
-                    let plane_count = (CUBE_DIM + PLANE_DIM - 1u32) / PLANE_DIM;
-                    let source = if UNIT_POS_PLANE < plane_count {
-                        UNIT_POS_PLANE as usize
-                    } else {
-                        0usize
-                    };
-                    let source_valid = if UNIT_POS_PLANE < plane_count {
-                        plane_valid[source]
-                    } else {
-                        0u32
-                    };
-                    let source_value = Layout::recompose(Leaves::load(
-                        &$first_shared,
-                        $( &$shared, )*
-                        zero_offsets,
-                        source,
-                    ));
-                    let block_accumulator = Layout::decompose(source_value).into_cells();
-                    let block_valid = RuntimeCell::<u32>::new(source_valid);
-                    let cursor = RuntimeCell::<u32>::new(UNIT_POS_PLANE + PLANE_DIM);
-                    while cursor.read() < plane_count {
-                        let index = cursor.read() as usize;
-                        if block_valid.read() != 0u32 && plane_valid[index] != 0u32 {
-                            let value = Layout::recompose(Leaves::load(
-                                &$first_shared,
-                                $( &$shared, )*
-                                zero_offsets,
-                                index,
-                            ));
-                            accumulate_register::<Item, Leaves, Layout, Op>(
-                                &block_accumulator,
-                                value,
-                            );
-                        }
-                        cursor.store(cursor.read() + PLANE_DIM);
-                    }
-                    let block_result = reduce_plane_valid::<Item, Leaves, Layout, Op>(
-                        Layout::recompose(Leaves::read(&block_accumulator)),
-                        block_valid.read(),
-                    );
-                    if UNIT_POS_PLANE == 0u32 && block_result.1 != 0u32 {
-                        block_result.0.store(
-                            $first_partial,
-                            $( $partial, )*
-                            zero_offsets,
-                            CUBE_POS as usize,
-                        );
-                    }
-                }
-            }
-        }
-    };
-}
-
-    define_storage_reduce_kernel!(reduce_storage_s2,LoadLeaves2,StoreLeaves2; [O0:input0:partial0:shared0,O1:input1:partial1:shared1]);
-    define_storage_reduce_kernel!(reduce_storage_s3,LoadLeaves3,StoreLeaves3; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2]);
-    define_storage_reduce_kernel!(reduce_storage_s4,LoadLeaves4,StoreLeaves4; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3]);
-    define_storage_reduce_kernel!(reduce_storage_s5,LoadLeaves5,StoreLeaves5; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4]);
-    define_storage_reduce_kernel!(reduce_storage_s6,LoadLeaves6,StoreLeaves6; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4,O5:input5:partial5:shared5]);
-    define_storage_reduce_kernel!(reduce_storage_s7,LoadLeaves7,StoreLeaves7; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4,O5:input5:partial5:shared5,O6:input6:partial6:shared6]);
-    define_storage_reduce_kernel!(reduce_storage_s8,LoadLeaves8,StoreLeaves8; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4,O5:input5:partial5:shared5,O6:input6:partial6:shared6,O7:input7:partial7:shared7]);
-    define_storage_reduce_kernel!(reduce_storage_s9,LoadLeaves9,StoreLeaves9; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4,O5:input5:partial5:shared5,O6:input6:partial6:shared6,O7:input7:partial7:shared7,O8:input8:partial8:shared8]);
-    define_storage_reduce_kernel!(reduce_storage_s10,LoadLeaves10,StoreLeaves10; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4,O5:input5:partial5:shared5,O6:input6:partial6:shared6,O7:input7:partial7:shared7,O8:input8:partial8:shared8,O9:input9:partial9:shared9]);
-    define_storage_reduce_kernel!(reduce_storage_s11,LoadLeaves11,StoreLeaves11; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4,O5:input5:partial5:shared5,O6:input6:partial6:shared6,O7:input7:partial7:shared7,O8:input8:partial8:shared8,O9:input9:partial9:shared9,O10:input10:partial10:shared10]);
-    define_storage_reduce_kernel!(reduce_storage_s12,LoadLeaves12,StoreLeaves12; [O0:input0:partial0:shared0,O1:input1:partial1:shared1,O2:input2:partial2:shared2,O3:input3:partial3:shared3,O4:input4:partial4:shared4,O5:input5:partial5:shared5,O6:input6:partial6:shared6,O7:input7:partial7:shared7,O8:input8:partial8:shared8,O9:input9:partial9:shared9,O10:input10:partial10:shared10,O11:input11:partial11:shared11]);
-
-    macro_rules! define_multi_reduce_finalize_kernel {
-    ($name:ident,$load_trait:ident,$store_trait:ident; [$( $out_ty:ident:$partial:ident:$init:ident:$output:ident ),+]) => {
-        #[cubecl::cube(launch_unchecked, explicit_define)]
-        fn $name<
-            Item: CubeType + Send + Sync + 'static,
-            $( $out_ty: CubePrimitive, )+
-            Leaves: CubeType + Send + Sync + 'static
-                + $load_trait<$( $out_ty ),+>
-                + $store_trait<$( $out_ty ),+>,
-            Layout: Decompose<Item, Leaves = Leaves> + Recompose<Item, Leaves = Leaves>,
-            Op: ReductionOp<Item>,
-        >(
-            $( $partial: &[$out_ty], )+
-            $( $init: &[$out_ty], )+
-            zero_offsets: &[u32],
-            $( $output: &mut [$out_ty], )+
-        ) {
-            if ABSOLUTE_POS == 0 {
-                let initial = Layout::recompose(Leaves::load(
-                    $( $init, )+ zero_offsets, 0,
-                ));
-                let reduced = Layout::recompose(Leaves::load(
-                    $( $partial, )+ zero_offsets, 0,
-                ));
-                Layout::decompose(Op::apply(initial, reduced)).store(
-                    $( $output, )+ zero_offsets, 0,
-                );
-            }
-        }
-    };
-}
-
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s2,LoadLeaves2,StoreLeaves2; [O0:partial0:init0:out0,O1:partial1:init1:out1]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s3,LoadLeaves3,StoreLeaves3; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s4,LoadLeaves4,StoreLeaves4; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s5,LoadLeaves5,StoreLeaves5; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s6,LoadLeaves6,StoreLeaves6; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4,O5:partial5:init5:out5]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s7,LoadLeaves7,StoreLeaves7; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4,O5:partial5:init5:out5,O6:partial6:init6:out6]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s8,LoadLeaves8,StoreLeaves8; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4,O5:partial5:init5:out5,O6:partial6:init6:out6,O7:partial7:init7:out7]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s9,LoadLeaves9,StoreLeaves9; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4,O5:partial5:init5:out5,O6:partial6:init6:out6,O7:partial7:init7:out7,O8:partial8:init8:out8]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s10,LoadLeaves10,StoreLeaves10; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4,O5:partial5:init5:out5,O6:partial6:init6:out6,O7:partial7:init7:out7,O8:partial8:init8:out8,O9:partial9:init9:out9]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s11,LoadLeaves11,StoreLeaves11; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4,O5:partial5:init5:out5,O6:partial6:init6:out6,O7:partial7:init7:out7,O8:partial8:init8:out8,O9:partial9:init9:out9,O10:partial10:init10:out10]);
-    define_multi_reduce_finalize_kernel!(reduce_finalize_s12,LoadLeaves12,StoreLeaves12; [O0:partial0:init0:out0,O1:partial1:init1:out1,O2:partial2:init2:out2,O3:partial3:init3:out3,O4:partial4:init4:out4,O5:partial5:init5:out5,O6:partial6:init6:out6,O7:partial7:init7:out7,O8:partial8:init8:out8,O9:partial9:init9:out9,O10:partial10:init10:out10,O11:partial11:init11:out11]);
-
-    #[cubecl::cube(launch_unchecked, explicit_define)]
-    fn reduce_storage1_partials_kernel<Item: CubePrimitive, Op: ReductionOp<Item>>(
-        input: &[Item],
-        len: &[u32],
-        partials: &mut [Item],
-    ) {
-        let unit = UNIT_POS as usize;
-        let cube_dim = BLOCK_SIZE as usize;
-        let logical_len = len[0] as usize;
-        let mut plane_values = Shared::<[Item]>::new_slice(cube_dim);
-        let mut plane_valid = Shared::<[u32]>::new_slice(cube_dim);
-        let tile_start = (CUBE_POS as usize) * TILE_SIZE;
-        let first_index = tile_start + unit;
-        let safe_index = if first_index < logical_len {
-            first_index
-        } else {
-            logical_len - 1usize
-        };
-        let accumulator = RuntimeCell::<Item>::new(input[safe_index]);
-
-        if tile_start + TILE_SIZE <= logical_len {
-            for item in 1usize..ITEMS_PER_UNIT {
-                accumulator.store(Op::apply(
-                    accumulator.read(),
-                    input[first_index + item * cube_dim],
-                ));
-            }
-            let result =
-                reduce_plane_full::<Item, Last<Item>, ScalarLayout<Item>, Op>(accumulator.read());
-            finish_storage1_workgroup::<Item, Op>(
-                result.value,
-                1u32,
-                &mut plane_values,
-                &mut plane_valid,
-                partials,
-            );
-        } else {
-            for item in 1usize..ITEMS_PER_UNIT {
-                let index = first_index + item * cube_dim;
-                if index < logical_len {
-                    accumulator.store(Op::apply(accumulator.read(), input[index]));
-                }
-            }
-            let result = reduce_plane_valid::<Item, Last<Item>, ScalarLayout<Item>, Op>(
-                accumulator.read(),
-                if first_index < logical_len {
-                    1u32
-                } else {
-                    0u32
-                },
-            );
-            finish_storage1_workgroup::<Item, Op>(
-                result.0.value,
-                result.1,
-                &mut plane_values,
-                &mut plane_valid,
-                partials,
-            );
-        }
-    }
-
-    #[cubecl::cube(launch_unchecked, explicit_define)]
-    fn reduce_storage1_finalize_kernel<Item: CubePrimitive, Op: ReductionOp<Item>>(
-        partial: &[Item],
-        init: &[Item],
-        output: &mut [Item],
-    ) {
-        if ABSOLUTE_POS == 0 {
-            output[0] = Op::apply(init[0], partial[0]);
-        }
-    }
-}
-
 fn pass_block_count(len: usize) -> usize {
     len.div_ceil(TILE_SIZE).max(1)
-}
-
-fn checked_u32(len: usize) -> Result<u32, Error> {
-    u32::try_from(len).map_err(|_| Error::LengthTooLarge { len })
 }
 
 /// Consumer-specific reduction dispatch.

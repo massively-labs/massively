@@ -1,6 +1,6 @@
 use cubecl::prelude::Runtime;
 
-use crate::{Error, Executor, MFlag, MIndex, MIter, MIterMut, MVec, op::BinaryPredicateOp};
+use crate::{Error, Executor, MFlag, MIndex, MIter, MVec, op::BinaryPredicateOp};
 
 /// Finds the first source item equal to any needle.
 ///
@@ -97,36 +97,6 @@ where
     )
 }
 
-/// Finds lower bounds into caller-provided storage.
-#[doc(hidden)]
-pub(crate) fn lower_bound_into<R, Source, Values, Output, Less>(
-    exec: &Executor<R>,
-    source: Source,
-    values: Values,
-    less: Less,
-    output: Output,
-) -> Result<(), Error>
-where
-    R: Runtime,
-    Source: MIter<R>,
-    Values: MIter<R, Item = Source::Item>,
-    Output: MIterMut<R, Item = MIndex>,
-    Less: BinaryPredicateOp<Source::Item>,
-{
-    let bounds = crate::search::lower_bounds_storage(
-        exec,
-        crate::api::iter::lower_fixed::<R, _>(source),
-        crate::api::iter::lower_fixed::<R, _>(values),
-        less,
-    )?;
-    crate::api::algorithm::transform::transform_into(
-        exec,
-        bounds.column(),
-        crate::op::Identity,
-        output,
-    )
-}
-
 /// Finds the upper bound of each value.
 ///
 /// `source` must be sorted according to `less`.
@@ -171,36 +141,6 @@ where
         crate::api::iter::lower_fixed::<R, _>(source),
         crate::api::iter::lower_fixed::<R, _>(values),
         less,
-    )
-}
-
-/// Finds upper bounds into caller-provided storage.
-#[doc(hidden)]
-pub(crate) fn upper_bound_into<R, Source, Values, Output, Less>(
-    exec: &Executor<R>,
-    source: Source,
-    values: Values,
-    less: Less,
-    output: Output,
-) -> Result<(), Error>
-where
-    R: Runtime,
-    Source: MIter<R>,
-    Values: MIter<R, Item = Source::Item>,
-    Output: MIterMut<R, Item = MIndex>,
-    Less: BinaryPredicateOp<Source::Item>,
-{
-    let bounds = crate::search::upper_bounds_storage(
-        exec,
-        crate::api::iter::lower_fixed::<R, _>(source),
-        crate::api::iter::lower_fixed::<R, _>(values),
-        less,
-    )?;
-    crate::api::algorithm::transform::transform_into(
-        exec,
-        bounds.column(),
-        crate::op::Identity,
-        output,
     )
 }
 

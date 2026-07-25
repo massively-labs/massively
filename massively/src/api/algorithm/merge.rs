@@ -126,7 +126,7 @@ where
         .ok_or(Error::LengthTooLarge {
             len: left_len as usize + right_len as usize,
         })?;
-    let output = exec.alloc::<Item>(len as usize);
+    let output = exec.alloc::<Item>(len);
     merge_into(exec, left, right, less, output.slice_mut(..))?;
     Ok(output)
 }
@@ -230,7 +230,7 @@ where
         .ok_or(Error::LengthTooLarge {
             len: left_len as usize + right_len as usize,
         })?;
-    let value_output = exec.alloc::<LeftValues::Item>(len as usize);
+    let value_output = exec.alloc::<LeftValues::Item>(len);
     merge_by_key_into(
         exec,
         left_keys,

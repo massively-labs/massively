@@ -117,8 +117,8 @@ pub fn solve<R: Runtime>(
         RankBefore,
     )?;
     let (sorted_scores, sorted_vertices) = MStorage::into_columns(sorted);
-    let vertices = exec.alloc::<u32>(take as usize);
-    let scores = exec.alloc::<u32>(take as usize);
+    let vertices = exec.alloc::<u32>(take);
+    let scores = exec.alloc::<u32>(take);
     vector::copy(exec, sorted_vertices.slice(..take), vertices.slice_mut(..))?;
     vector::copy(exec, sorted_scores.slice(..take), scores.slice_mut(..))?;
     Ok(Ranking { vertices, scores })

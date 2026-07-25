@@ -5,8 +5,8 @@
 //!
 //! Segment algorithms return owned device storage. Length-preserving algorithms
 //! return new flat values with the original offsets, length-changing algorithms
-//! return values with rebuilt offsets, and reductions return one value per
-//! segment.
+//! return values with a rebuilt [`Segmentation`], and reductions return one
+//! value per segment.
 
 pub(crate) mod control;
 mod segment;
@@ -24,12 +24,22 @@ use crate::{
     op::BinaryPredicateOp, op::ExpandOp, op::PredicateOp, op::ReductionOp, op::UnaryOp,
 };
 
+pub(crate) fn segment_count(offset_count: usize) -> Result<usize, Error> {
+    offset_count
+        .checked_sub(1)
+        .ok_or(Error::InvalidSegmentation)
+}
+
 /// A flat value stream and the offsets delimiting its segments.
 ///
 /// When `Values` and `Offsets` are logical iterators, this is itself an
 /// [`MIter`] whose item is [`Segment<Values::Item>`](Segment). Each item is a
 /// read-only adapter over the shared value stream and supports `len()` and
 /// unchecked `at()` access inside CubeCL operations.
+///
+/// [`Segmentation::segments`] uses a cloned [`Segmentation`] as `Offsets`, so
+/// validated partition metadata remains available after length-preserving
+/// algorithms. Length-changing owned results rebuild and retain one as well.
 #[derive(Clone, Copy, Debug)]
 pub struct SegmentIterator<Values, Offsets> {
     values: Values,
@@ -47,12 +57,12 @@ impl<Values, Offsets> SegmentIterator<Values, Offsets> {
         &self.values
     }
 
-    /// Returns the segment offsets.
+    /// Returns the iterator that supplies the segment offsets.
     pub const fn offsets(&self) -> &Offsets {
         &self.offsets
     }
 
-    /// Decomposes this input into its flat values and offsets.
+    /// Decomposes this input into its flat values and offset iterator.
     pub fn into_parts(self) -> (Values, Offsets) {
         (self.values, self.offsets)
     }
@@ -87,7 +97,6 @@ where
     Values: MIter<R>,
     Offsets: MIter<R, Item = MIndex>,
     SegmentRead<Values::Read, Offsets::Read>: crate::core::facade::KernelInput<R, Item = Segment<Values::Item>>
-        + crate::core::facade::IterLength
         + crate::read::SliceExpression,
 {
     type Item = Segment<Values::Item>;
@@ -99,16 +108,16 @@ where
         Bounds: RangeBounds<MIndex>,
     {
         let input = self.clone().lower_read();
-        let len = crate::core::facade::IterLength::logical_len(&input)
+        let len = crate::core::facade::logical_len::<R, _>(&input)
             .expect("cannot slice segmented input with an invalid length");
-        let (start, count) = crate::api::iter::resolve_iter_range(len, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len, range);
         crate::read::Slice::new(crate::read::SliceExpression::slice_expression(
             &input, start, count,
         ))
     }
 
     fn capacity(&self) -> Result<crate::MIndex, Error> {
-        Ok(MIter::capacity(&self.offsets)?.saturating_sub(1))
+        crate::api::iter::logical_len(segment_count(MIter::capacity(&self.offsets)? as usize)?)
     }
 
     fn lower_read(self) -> Self::Read {
@@ -177,6 +186,10 @@ pub struct Unique<Equal>(pub Equal);
 #[derive(Clone, Copy, Debug)]
 pub struct Filter<Pred>(pub Pred);
 
+/// Keeps at most the first `n` items from every segment.
+#[derive(Clone, Copy, Debug)]
+pub struct Take(pub MIndex);
+
 /// Reduces every segment to one item, starting from `init`.
 #[derive(Clone, Copy, Debug)]
 pub struct Reduce<Op, Init>(pub Op, pub Init);
@@ -184,6 +197,18 @@ pub struct Reduce<Op, Init>(pub Op, pub Init);
 /// Counts the items satisfying a predicate within every segment.
 #[derive(Clone, Copy, Debug)]
 pub struct CountIf<Pred>(pub Pred);
+
+/// Finds the first matching local index in every segment.
+///
+/// A segment with no match returns its length.
+#[derive(Clone, Copy, Debug)]
+pub struct FindIf<Pred>(pub Pred);
+
+/// Finds the first local index whose item equals its successor in every segment.
+///
+/// A segment with no adjacent equal pair returns its length.
+#[derive(Clone, Copy, Debug)]
+pub struct AdjacentFind<Equal>(pub Equal);
 
 /// Tests whether every item satisfies a predicate within every segment.
 #[derive(Clone, Copy, Debug)]
@@ -273,8 +298,8 @@ where
 ///
 /// Each algorithm selects its complete output shape. Length-preserving
 /// algorithms return new values with the input offsets, compacting algorithms
-/// return rebuilt segments, and summarizing algorithms return one value per
-/// segment.
+/// return rebuilt segments backed by a [`Segmentation`], and summarizing
+/// algorithms return one value per segment.
 pub trait Executable<R, Input, InputOffsets>: Sized
 where
     R: Runtime,
@@ -322,7 +347,7 @@ where
     Op: ExpandOp<Input::Item>,
     Op::Output: MAlloc<R>,
 {
-    type Output = SegmentIterator<MVec<R, Op::Output>, MVec<R, MIndex>>;
+    type Output = SegmentIterator<MVec<R, Op::Output>, Segmentation<R>>;
 
     fn run(
         self,
@@ -333,28 +358,8 @@ where
         let (values, offsets) = input.into_parts();
         let (output, element_offsets) = crate::api::algorithm::flat_map::expand(exec, values, op)?;
         let output_offsets = crate::vector::gather(exec, element_offsets.slice(..), offsets)?;
-        Ok(SegmentIterator::new(output, output_offsets))
-    }
-}
-
-impl<R, Input, InputOffsets, Output, Op>
-    LengthPreservingExecutableInto<R, Input, InputOffsets, Output> for ForEachSegment<Map<Op>>
-where
-    R: Runtime,
-    Input: MIter<R>,
-    InputOffsets: MIter<R, Item = MIndex>,
-    Output: MIterMut<R>,
-    Op: UnaryOp<Input::Item, Output = Output::Item>,
-{
-    fn run_into(
-        self,
-        exec: &Executor<R>,
-        input: SegmentIterator<Input, InputOffsets>,
-        output: Output,
-    ) -> Result<(), Error> {
-        let Map(op) = self.0;
-        let (values, _) = input.into_parts();
-        crate::api::algorithm::transform::transform_into(exec, values, op, output)
+        let segmentation = Segmentation::from_generated_offsets(output_offsets, output.len()?)?;
+        Ok(SegmentIterator::new(output, segmentation))
     }
 }
 
@@ -376,8 +381,8 @@ where
     ) -> Result<(), Error> {
         let Sort(less) = self.0;
         let (values, offsets) = input.into_parts();
-        let value_len = values.capacity()? as usize;
-        let control = control::SegmentControl::new(exec, offsets, value_len)?;
+        let value_len = values.capacity()?;
+        let control = control::SegmentControl::new(exec, offsets, value_len as usize)?;
         let ids = control.ids(exec)?;
 
         let values = crate::api::iter::lower_fixed::<R, _>(values);
@@ -403,37 +408,6 @@ where
             permutation.slice_mut(..),
         )?;
         crate::api::algorithm::apply_permutation_into(exec, values, permutation.column(), output)
-    }
-}
-
-impl<R, Input, InputOffsets, Output, Op>
-    LengthPreservingExecutableInto<R, Input, InputOffsets, Output>
-    for ForEachSegment<AdjacentDifference<Op>>
-where
-    R: Runtime,
-    Input: MIter<R, Item = Output::Item> + Clone,
-    InputOffsets: MIter<R, Item = MIndex>,
-    Output: MIterMut<R>,
-    Output::SliceMut: MIterMut<R, Item = Output::Item>,
-    Op: ReductionOp<Input::Item>,
-{
-    fn run_into(
-        self,
-        exec: &Executor<R>,
-        input: SegmentIterator<Input, InputOffsets>,
-        output: Output,
-    ) -> Result<(), Error> {
-        let AdjacentDifference(op) = self.0;
-        let (values, offsets) = input.into_parts();
-        let control = control::SegmentControl::new(exec, offsets, values.capacity()? as usize)?;
-        crate::vector::adjacent_difference_into(exec, values.clone(), op, output.slice_mut(..))?;
-        crate::vector::transform_where(
-            exec,
-            values,
-            crate::op::Identity,
-            control.heads.slice(..),
-            output,
-        )
     }
 }
 
@@ -706,7 +680,8 @@ where
     Output: MIterMut<R, Item = Values::Item>,
     Op: ReductionOp<Values::Item>,
 {
-    let result = exec.alloc::<Values::Item>(control.segment_count);
+    let segment_count = crate::api::iter::logical_len(control.segment_count)?;
+    let result = exec.alloc::<Values::Item>(segment_count);
     crate::api::algorithm::fill_value(exec, &init, result.slice_mut(..))?;
     if control.value_len == 0 {
         return crate::api::algorithm::transform::transform_into(
@@ -722,7 +697,7 @@ where
         exec,
     )?;
 
-    let reduced = exec.alloc::<Values::Item>(control.segment_count);
+    let reduced = exec.alloc::<Values::Item>(segment_count);
     reduced
         .slice_mut(..)
         .run_output_operation(SegmentReduceOperation {
@@ -734,7 +709,7 @@ where
             _op: op,
         })?;
 
-    let keys = exec.alloc::<MIndex>(control.segment_count);
+    let keys = exec.alloc::<MIndex>(segment_count);
     crate::api::algorithm::apply_permutation_prefix_into(
         exec,
         crate::api::iter::lower_fixed::<R, _>(control.heads.slice(..)),
@@ -742,7 +717,7 @@ where
         head_control.count(),
         keys.slice_mut(..),
     )?;
-    let indices = exec.alloc::<MIndex>(control.segment_count);
+    let indices = exec.alloc::<MIndex>(segment_count);
     crate::api::algorithm::transform::transform_prefix_into(
         exec,
         keys.slice(..),
@@ -804,8 +779,8 @@ where
         output: SegmentedMut<Output, OutputOffsets>,
     ) -> Result<crate::DeviceVec<R, MIndex>, Error> {
         let (values, offsets) = input.into_parts();
-        let value_len = values.capacity()? as usize;
-        let control = control::SegmentOffsets::new(exec, offsets, value_len)?;
+        let value_len = values.capacity()?;
+        let control = control::SegmentOffsets::new(exec, offsets, value_len as usize)?;
         let flags = exec.alloc::<u32>(value_len);
         crate::api::algorithm::transform::transform_into(
             exec,
@@ -813,6 +788,37 @@ where
             PredicateMap::<Pred>(PhantomData),
             flags.slice_mut(..),
         )?;
+        let (output_values, output_offsets) = output.into_parts();
+        control.compact(
+            exec,
+            crate::api::iter::lower_fixed::<R, _>(values),
+            flags,
+            output_values,
+            output_offsets,
+        )
+    }
+}
+
+impl<R, Input, InputOffsets, Output, OutputOffsets>
+    CompactingExecutableInto<R, Input, InputOffsets, Output, OutputOffsets> for ForEachSegment<Take>
+where
+    R: Runtime,
+    Input: MIter<R, Item = Output::Item>,
+    InputOffsets: MIter<R, Item = MIndex>,
+    Output: MIterMut<R>,
+    OutputOffsets: MIterMut<R, Item = MIndex>,
+{
+    fn run_into(
+        self,
+        exec: &Executor<R>,
+        input: SegmentIterator<Input, InputOffsets>,
+        output: SegmentedMut<Output, OutputOffsets>,
+    ) -> Result<crate::DeviceVec<R, MIndex>, Error> {
+        let Take(count) = self.0;
+        let (values, offsets) = input.into_parts();
+        let value_len = values.capacity()? as usize;
+        let control = control::SegmentControl::new(exec, offsets, value_len)?;
+        let flags = control.take_flags(exec, count)?;
         let (output_values, output_offsets) = output.into_parts();
         control.compact(
             exec,
@@ -864,7 +870,7 @@ macro_rules! impl_predicate_summary {
                 output: Output,
             ) -> Result<(), Error> {
                 let (values, offsets) = input.into_parts();
-                let value_len = values.capacity()? as usize;
+                let value_len = values.capacity()?;
                 let mapped = exec.alloc::<$result>(value_len);
                 crate::api::algorithm::transform::transform_into(
                     exec,
@@ -889,6 +895,102 @@ impl_predicate_summary!(AllOf, PredicateMap, MFlag, control::MinU32, 1u32);
 impl_predicate_summary!(AnyOf, PredicateMap, MFlag, control::MaxU32, 0u32);
 impl_predicate_summary!(NoneOf, NegatedPredicateMap, MFlag, control::MinU32, 1u32);
 
+fn finish_match_positions<R, Output>(
+    exec: &Executor<R>,
+    control: &control::SegmentControl<R>,
+    candidates: crate::DeviceVec<R, MIndex>,
+    output: Output,
+) -> Result<(), Error>
+where
+    R: Runtime,
+    Output: MIterMut<R, Item = MIndex>,
+{
+    let reduced = exec.alloc::<u32>(crate::api::iter::logical_len(control.segment_count)?);
+    reduce_segments_with_control(
+        exec,
+        candidates.slice(..),
+        control,
+        exec.value(u32::MAX)?,
+        control::MinU32,
+        reduced.slice_mut(..),
+    )?;
+    let result = control.finish_sorted_until(exec, &reduced)?;
+    crate::api::algorithm::transform::transform_into(
+        exec,
+        result.slice(..),
+        crate::op::Identity,
+        output,
+    )
+}
+
+impl<R, Input, InputOffsets, Output, Pred> SummarizingExecutableInto<R, Input, InputOffsets, Output>
+    for ForEachSegment<FindIf<Pred>>
+where
+    R: Runtime,
+    Input: MIter<R>,
+    InputOffsets: MIter<R, Item = MIndex>,
+    Output: MIterMut<R, Item = MIndex>,
+    Pred: PredicateOp<Input::Item>,
+{
+    fn run_into(
+        self,
+        exec: &Executor<R>,
+        input: SegmentIterator<Input, InputOffsets>,
+        output: Output,
+    ) -> Result<(), Error> {
+        let FindIf(_pred) = self.0;
+        let (values, offsets) = input.into_parts();
+        let value_len = values.capacity()?;
+        let control = control::SegmentControl::new(exec, offsets, value_len as usize)?;
+        let matches = exec.alloc::<MFlag>(value_len);
+        crate::api::algorithm::transform::transform_into(
+            exec,
+            values,
+            PredicateMap::<Pred>(PhantomData),
+            matches.slice_mut(..),
+        )?;
+        let candidates = control.match_candidates(exec, &matches, 0)?;
+        finish_match_positions(exec, &control, candidates, output)
+    }
+}
+
+impl<R, Input, InputOffsets, Output, Equal>
+    SummarizingExecutableInto<R, Input, InputOffsets, Output>
+    for ForEachSegment<AdjacentFind<Equal>>
+where
+    R: Runtime,
+    Input: MIter<R>,
+    InputOffsets: MIter<R, Item = MIndex>,
+    Output: MIterMut<R, Item = MIndex>,
+    Equal: BinaryPredicateOp<Input::Item>,
+{
+    fn run_into(
+        self,
+        exec: &Executor<R>,
+        input: SegmentIterator<Input, InputOffsets>,
+        output: Output,
+    ) -> Result<(), Error> {
+        let AdjacentFind(_equal) = self.0;
+        let (values, offsets) = input.into_parts();
+        let value_len = values.capacity()?;
+        let control = control::SegmentControl::new(exec, offsets, value_len as usize)?;
+        let different = crate::ordering::unique_head_flags::<R, _, Equal>(
+            exec,
+            crate::api::iter::lower_fixed::<R, _>(values),
+        )?;
+        control.merge_heads(exec, &different)?;
+        let matches = exec.alloc::<MFlag>(value_len);
+        crate::api::algorithm::transform::transform_into(
+            exec,
+            different.slice(..),
+            InvertFlag,
+            matches.slice_mut(..),
+        )?;
+        let candidates = control.match_candidates(exec, &matches, 1)?;
+        finish_match_positions(exec, &control, candidates, output)
+    }
+}
+
 impl<R, Input, InputOffsets, Output, Less> SummarizingExecutableInto<R, Input, InputOffsets, Output>
     for ForEachSegment<IsSorted<Less>>
 where
@@ -906,8 +1008,8 @@ where
     ) -> Result<(), Error> {
         let IsSorted(_less) = self.0;
         let (values, offsets) = input.into_parts();
-        let value_len = values.capacity()? as usize;
-        let control = control::SegmentControl::new(exec, offsets, value_len)?;
+        let value_len = values.capacity()?;
+        let control = control::SegmentControl::new(exec, offsets, value_len as usize)?;
         let breaks = crate::ordering::sorted_break_flags::<R, _, Less>(
             exec,
             crate::api::iter::lower_fixed::<R, _>(values),
@@ -955,7 +1057,7 @@ where
             crate::api::iter::lower_fixed::<R, _>(values),
         )?;
         let candidates = control.sorted_until_candidates(exec, &breaks)?;
-        let reduced = exec.alloc::<u32>(control.segment_count);
+        let reduced = exec.alloc::<u32>(crate::api::iter::logical_len(control.segment_count)?);
         reduce_segments_with_control(
             exec,
             candidates.slice(..),
@@ -993,7 +1095,7 @@ macro_rules! impl_owned_length_preserving_input {
                 input: SegmentIterator<Input, InputOffsets>,
             ) -> Result<Self::Output, Error> {
                 let (values, offsets) = input.into_parts();
-                let output = exec.alloc::<Input::Item>(values.capacity()? as usize);
+                let output = exec.alloc::<Input::Item>(values.capacity()?);
                 LengthPreservingExecutableInto::run_into(
                     self,
                     exec,
@@ -1028,7 +1130,7 @@ where
         input: SegmentIterator<Input, InputOffsets>,
     ) -> Result<Self::Output, Error> {
         let (values, offsets) = input.into_parts();
-        let output = exec.alloc::<Input::Item>(values.capacity()? as usize);
+        let output = exec.alloc::<Input::Item>(values.capacity()?);
         LengthPreservingExecutableInto::run_into(
             self,
             exec,
@@ -1054,7 +1156,7 @@ where
         input: SegmentIterator<Input, InputOffsets>,
     ) -> Result<Self::Output, Error> {
         let (values, offsets) = input.into_parts();
-        let output = exec.alloc::<Input::Item>(values.capacity()? as usize);
+        let output = exec.alloc::<Input::Item>(values.capacity()?);
         LengthPreservingExecutableInto::run_into(
             self,
             exec,
@@ -1108,15 +1210,15 @@ macro_rules! impl_owned_compacting {
             InputOffsets: MIter<R, Item = MIndex>,
             $( $bound )+
         {
-            type Output = SegmentIterator<MVec<R, Input::Item>, MVec<R, MIndex>>;
+            type Output = SegmentIterator<MVec<R, Input::Item>, Segmentation<R>>;
 
             fn run(
                 self,
                 exec: &Executor<R>,
                 input: SegmentIterator<Input, InputOffsets>,
             ) -> Result<Self::Output, Error> {
-                let values = exec.alloc::<Input::Item>(input.values().capacity()? as usize);
-                let offsets = exec.alloc::<MIndex>(input.offsets().capacity()? as usize);
+                let values = exec.alloc::<Input::Item>(input.values().capacity()?);
+                let offsets = exec.alloc::<MIndex>(input.offsets().capacity()?);
                 let written = CompactingExecutableInto::run_into(
                     self,
                     exec,
@@ -1126,7 +1228,8 @@ macro_rules! impl_owned_compacting {
                 let written = MVal::from_storage(written)?.read(exec)?;
                 let values =
                     crate::api::iter::into_exact_prefix::<R, Input::Item>(exec, values, written)?;
-                Ok(SegmentIterator::new(values, offsets))
+                let segmentation = Segmentation::from_generated_offsets(offsets, written)?;
+                Ok(SegmentIterator::new(values, segmentation))
             }
         }
     };
@@ -1134,6 +1237,35 @@ macro_rules! impl_owned_compacting {
 
 impl_owned_compacting!(Unique<Op>, Op: BinaryPredicateOp<Input::Item>);
 impl_owned_compacting!(Filter<Op>, Op: PredicateOp<Input::Item>);
+
+impl<R, Input, InputOffsets> Executable<R, Input, InputOffsets> for ForEachSegment<Take>
+where
+    R: Runtime,
+    Input: MIter<R>,
+    Input::Item: MAlloc<R>,
+    InputOffsets: MIter<R, Item = MIndex>,
+{
+    type Output = SegmentIterator<MVec<R, Input::Item>, Segmentation<R>>;
+
+    fn run(
+        self,
+        exec: &Executor<R>,
+        input: SegmentIterator<Input, InputOffsets>,
+    ) -> Result<Self::Output, Error> {
+        let values = exec.alloc::<Input::Item>(input.values().capacity()?);
+        let offsets = exec.alloc::<MIndex>(input.offsets().capacity()?);
+        let written = CompactingExecutableInto::run_into(
+            self,
+            exec,
+            input,
+            SegmentedMut::new(values.slice_mut(..), offsets.slice_mut(..)),
+        )?;
+        let written = MVal::from_storage(written)?.read(exec)?;
+        let values = crate::api::iter::into_exact_prefix::<R, Input::Item>(exec, values, written)?;
+        let segmentation = Segmentation::from_generated_offsets(offsets, written)?;
+        Ok(SegmentIterator::new(values, segmentation))
+    }
+}
 
 impl<R, Input, InputOffsets, Op, Item> Executable<R, Input, InputOffsets>
     for ForEachSegment<Reduce<Op, Item>>
@@ -1151,10 +1283,8 @@ where
         exec: &Executor<R>,
         input: SegmentIterator<Input, InputOffsets>,
     ) -> Result<Self::Output, Error> {
-        let offset_len = input.offsets().capacity()? as usize;
-        let segment_count = offset_len
-            .checked_sub(1)
-            .ok_or(Error::LengthMismatch { left: 1, right: 0 })?;
+        let segment_count = segment_count(input.offsets().capacity()? as usize)?;
+        let segment_count = crate::api::iter::logical_len(segment_count)?;
         let output = exec.alloc::<Input::Item>(segment_count);
         SummarizingExecutableInto::run_into(self, exec, input, output.slice_mut(..))?;
         Ok(output)
@@ -1178,10 +1308,8 @@ macro_rules! impl_owned_summary {
                 exec: &Executor<R>,
                 input: SegmentIterator<Input, InputOffsets>,
             ) -> Result<Self::Output, Error> {
-                let offset_len = input.offsets().capacity()? as usize;
-                let segment_count = offset_len
-                    .checked_sub(1)
-                    .ok_or(Error::LengthMismatch { left: 1, right: 0 })?;
+                let segment_count = segment_count(input.offsets().capacity()? as usize)?;
+                let segment_count = crate::api::iter::logical_len(segment_count)?;
                 let output = exec.alloc::<$result>(segment_count);
                 SummarizingExecutableInto::run_into(self, exec, input, output.slice_mut(..))?;
                 Ok(output)
@@ -1194,5 +1322,7 @@ impl_owned_summary!(CountIf<Op>, MIndex, Op: PredicateOp<Input::Item>);
 impl_owned_summary!(AllOf<Op>, MFlag, Op: PredicateOp<Input::Item>);
 impl_owned_summary!(AnyOf<Op>, MFlag, Op: PredicateOp<Input::Item>);
 impl_owned_summary!(NoneOf<Op>, MFlag, Op: PredicateOp<Input::Item>);
+impl_owned_summary!(FindIf<Op>, MIndex, Op: PredicateOp<Input::Item>);
+impl_owned_summary!(AdjacentFind<Op>, MIndex, Op: BinaryPredicateOp<Input::Item>);
 impl_owned_summary!(IsSorted<Op>, MFlag, Op: BinaryPredicateOp<Input::Item>);
 impl_owned_summary!(IsSortedUntil<Op>, MIndex, Op: BinaryPredicateOp<Input::Item>);

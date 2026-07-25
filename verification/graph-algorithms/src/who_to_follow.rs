@@ -125,7 +125,7 @@ pub fn solve<R: Runtime>(
         vector::copy_where(exec, ranked.slice(..), common::stencil(keep.slice(..)))?,
     )?;
     let (_circle_ppr_all, circle_vertices_all) = MStorage::into_columns(candidates);
-    let circle_vertices = exec.alloc::<u32>(circle_size as usize);
+    let circle_vertices = exec.alloc::<u32>(circle_size);
     vector::copy(
         exec,
         circle_vertices_all.slice(..circle_size),
@@ -191,8 +191,8 @@ pub fn solve<R: Runtime>(
         RecommendationBefore,
     )?;
     let (authority, _ppr, vertices) = MStorage::into_columns(recommendations);
-    let output_vertices = exec.alloc::<u32>(recommendation_count as usize);
-    let output_scores = exec.alloc::<f32>(recommendation_count as usize);
+    let output_vertices = exec.alloc::<u32>(recommendation_count);
+    let output_scores = exec.alloc::<f32>(recommendation_count);
     vector::copy(
         exec,
         vertices.slice(..recommendation_count),

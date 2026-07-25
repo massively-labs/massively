@@ -449,19 +449,6 @@ where
     values.gather(exec, indices, output)
 }
 
-pub(crate) fn apply_permutation<R, Input, Output>(
-    exec: &Executor<R>,
-    input: Input,
-    indices: crate::Column<u32>,
-    output: Output,
-) -> Result<(), Error>
-where
-    R: Runtime,
-    Input: GatherInput<R, crate::Column<crate::MIndex>, Output>,
-{
-    gather_direct(exec, input, indices, output)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

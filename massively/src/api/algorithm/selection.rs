@@ -155,7 +155,7 @@ where
     Item: MAlloc<R>,
     Stencil: MIter<R, Item = MFlag>,
 {
-    let capacity = input.len()? as usize;
+    let capacity = input.len()?;
     let output = exec.alloc::<Item>(capacity);
     let len = copy_where_into(exec, input, stencil, output.slice_mut(..))?;
     crate::api::iter::into_exact_prefix::<R, Item>(exec, output, len.read(exec)?)
@@ -211,7 +211,7 @@ where
     Item: MAlloc<R>,
     Stencil: MIter<R, Item = MFlag>,
 {
-    let capacity = input.len()? as usize;
+    let capacity = input.len()?;
     let output = exec.alloc::<Item>(capacity);
     let len = remove_where_into(exec, input, stencil, output.slice_mut(..))?;
     crate::api::iter::into_exact_prefix::<R, Item>(exec, output, len.read(exec)?)
@@ -279,7 +279,7 @@ where
     Pred: PredicateOp<Item>,
 {
     let len = input.len()?;
-    let output = exec.alloc::<Item>(len as usize);
+    let output = exec.alloc::<Item>(len);
     let boundary = partition_into(exec, input, pred, output.slice_mut(..))?.read(exec)?;
     Ok((output, boundary))
 }

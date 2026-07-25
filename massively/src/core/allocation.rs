@@ -7,8 +7,8 @@ use std::ops::RangeBounds;
 use cubecl::prelude::Runtime;
 
 use crate::{
-    Column, DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, MStorageElement, ReadExpression,
-    S1, StorageLayout, Zip,
+    Column, DeviceSliceMut, DeviceVec, Error, Executor, MStorageElement, ReadExpression, S1,
+    StorageLayout, Zip,
     api::iter::{MAlloc, MIter, MIterMut, MStorage, StorageSlice, StorageSliceMut},
     output::{
         LowerOutputExpression, OutputExpression, PaddedOutputSlots, SliceOutput, StageOutput,
@@ -17,7 +17,7 @@ use crate::{
     reduce::StageRead,
     selection::FillOutput,
     storage::{Concat, FlatLeaves, FlatRow, JoinedRow, Last, More},
-    transform::{MaterializeDispatch, materialize},
+    transform::materialize,
 };
 
 /// Owned storage that can produce read and mutable output trees.
@@ -112,13 +112,6 @@ where
     DeviceSliceMut<T>: OutputExpression<Item = T, StorageArity = S1>
         + LowerOutputExpression<Slots = crate::read::Env1<T>>
         + StageOutput<R, Env0>,
-    Dispatch<crate::A13, crate::S12>: MaterializeDispatch<
-            R,
-            Column<T>,
-            DeviceSliceMut<T>,
-            crate::read::KernelReadSlots<crate::read::Env1<T>>,
-            crate::output::KernelOutputSlots<crate::read::Env1<T>>,
-        >,
 {
     fn copy_storage(&self, exec: &Executor<R>, output: Self::Write) -> Result<(), Error> {
         materialize(exec, self.read(), output)
@@ -723,7 +716,7 @@ where
     where
         Bounds: RangeBounds<crate::MIndex>,
     {
-        let (start, count) = crate::api::iter::resolve_iter_range(self.capacity(), range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(self.capacity(), range);
         self.slice_usize(start..start + count)
     }
 
@@ -731,7 +724,7 @@ where
     where
         Bounds: RangeBounds<crate::MIndex>,
     {
-        let (start, count) = crate::api::iter::resolve_iter_range(self.capacity(), range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(self.capacity(), range);
         self.slice_mut_usize(start..start + count)
     }
 }
@@ -793,7 +786,7 @@ where
         Bounds: RangeBounds<crate::MIndex>,
     {
         let len = MStorage::capacity(self).expect("storage columns have equal lengths");
-        let (start, count) = crate::api::iter::resolve_iter_range(len as usize, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len as usize, range);
         StorageSlice::new(self, start, count)
     }
 
@@ -802,13 +795,15 @@ where
         Bounds: RangeBounds<crate::MIndex>,
     {
         let len = MStorage::capacity(self).expect("storage columns have equal lengths");
-        let (start, count) = crate::api::iter::resolve_iter_range(len as usize, range);
+        let (start, count) = crate::read::resolve_mindex_slice_range(len as usize, range);
         StorageSliceMut::new(self, start, count)
     }
 }
 
 impl<R: Runtime> Executor<R> {
     /// Allocates uninitialized device storage for `len` flat rows.
+    ///
+    /// `len` uses [`crate::MIndex`], matching iterator lengths and index-based algorithms.
     ///
     /// The storage must be completely written before it is read.
     ///
@@ -831,8 +826,8 @@ impl<R: Runtime> Executor<R> {
     ///
     /// assert_eq!(exec.to_host(&output).unwrap(), vec![7, 7, 7, 7]);
     /// ```
-    pub fn alloc<Item: MAlloc<R>>(&self, len: usize) -> crate::MVec<R, Item> {
-        <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len)
+    pub fn alloc<Item: MAlloc<R>>(&self, len: crate::MIndex) -> crate::MVec<R, Item> {
+        <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len as usize)
     }
 
     pub(crate) fn alloc_row<Item: RowAlloc<R>>(
@@ -843,6 +838,8 @@ impl<R: Runtime> Executor<R> {
     }
 
     /// Allocates storage and fills every logical item with `value`.
+    ///
+    /// `len` uses [`crate::MIndex`], matching iterator lengths and index-based algorithms.
     ///
     /// # Examples
     ///
@@ -855,12 +852,12 @@ impl<R: Runtime> Executor<R> {
     ///
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![42, 42, 42]);
     /// ```
-    pub fn full<Item>(&self, len: usize, value: Item) -> Result<crate::MVec<R, Item>, Error>
+    pub fn full<Item>(&self, len: crate::MIndex, value: Item) -> Result<crate::MVec<R, Item>, Error>
     where
         Item: MAlloc<R>,
     {
         let value = self.value(value)?;
-        self.full_value(len, &value)
+        self.full_value(len as usize, &value)
     }
 
     pub(crate) fn full_value<Item>(
@@ -871,7 +868,7 @@ impl<R: Runtime> Executor<R> {
     where
         Item: MAlloc<R>,
     {
-        let storage = self.alloc::<Item>(len);
+        let storage = <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len);
         crate::api::algorithm::fill_value(self, value, MStorage::slice_mut(&storage, ..))?;
         Ok(storage)
     }
@@ -880,11 +877,8 @@ impl<R: Runtime> Executor<R> {
 /// Normalizes a sortable expression into its canonical owned row storage.
 pub(crate) trait NormalizeOwnedInput<R: Runtime>: ReadExpression + Sized {
     type OwnedStorage: RowStorage<R>;
-    type OwnedRead: ReadExpression<Item = Self::Item> + LowerReadExpression + StageRead<R, Env0>;
 
     fn normalize_owned(self, exec: &Executor<R>) -> Result<Self::OwnedStorage, Error>;
-
-    fn owned_read(storage: &Self::OwnedStorage) -> Self::OwnedRead;
 }
 
 impl<R, Input> NormalizeOwnedInput<R> for Input
@@ -893,21 +887,13 @@ where
     Input: ReadExpression + LowerReadExpression + StageRead<R, Env0>,
     Input::Item: RowAlloc<R>,
     <Input::Item as StorageLayout>::StorageLeaves: crate::storage::StorePadded12,
+    <<Input::Item as StorageLayout>::StorageLeaves as cubecl::prelude::CubeType>::ExpandType:
+        crate::storage::StorePadded12Expand,
     <Input::Item as RowAlloc<R>>::RowStorage: RowStorage<R>,
     <<Input::Item as RowAlloc<R>>::RowStorage as RowStorage<R>>::Write:
         OutputExpression<Item = Input::Item>,
-    Dispatch<crate::A13, crate::S12>: MaterializeDispatch<
-            R,
-            Input,
-            <<Input::Item as RowAlloc<R>>::RowStorage as RowStorage<R>>::Write,
-            crate::read::KernelReadSlots<Input::Slots>,
-            crate::output::KernelOutputSlots<
-                <<Input::Item as RowAlloc<R>>::RowStorage as RowStorage<R>>::WriteSlots,
-            >,
-        >,
 {
     type OwnedStorage = <Input::Item as RowAlloc<R>>::RowStorage;
-    type OwnedRead = <<Input::Item as RowAlloc<R>>::RowStorage as RowStorage<R>>::Read;
 
     fn normalize_owned(self, exec: &Executor<R>) -> Result<Self::OwnedStorage, Error> {
         let len = self.logical_len()?;
@@ -917,16 +903,11 @@ where
         materialize(exec, self, storage.write())?;
         Ok(storage)
     }
-
-    fn owned_read(storage: &Self::OwnedStorage) -> Self::OwnedRead {
-        storage.read()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::materialize;
     use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -949,7 +930,7 @@ mod tests {
             b.column(),
             c.column(),
         ));
-        materialize(&exec, input, storage.write()).unwrap();
+        crate::transform::materialize(&exec, input, storage.write()).unwrap();
 
         let (a, b, c) = MStorage::into_columns(storage);
         assert_eq!(exec.to_host(&a).unwrap(), vec![1, 2, 3]);

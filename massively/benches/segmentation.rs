@@ -256,24 +256,6 @@ fn bench_round_transition(c: &mut Criterion) {
                 })
             });
 
-            group.bench_function(BenchmarkId::new("plus_segmentation", &case), |b| {
-                b.iter(|| {
-                    let output = ForEachSegment(FlatMap(Fanout012))
-                        .run(
-                            &exec,
-                            SegmentIterator::new(
-                                black_box(values.slice(..)),
-                                black_box(offsets.slice(..)),
-                            ),
-                        )
-                        .unwrap();
-                    let (output_values, output_offsets) = output.into_parts();
-                    let segmentation =
-                        Segmentation::from_offsets(&exec, output_offsets.slice(..)).unwrap();
-                    black_box((output_values, segmentation));
-                })
-            });
-
             group.bench_function(BenchmarkId::new("plus_ids", &case), |b| {
                 b.iter(|| {
                     let output = ForEachSegment(FlatMap(Fanout012))
@@ -285,9 +267,7 @@ fn bench_round_transition(c: &mut Criterion) {
                             ),
                         )
                         .unwrap();
-                    let (output_values, output_offsets) = output.into_parts();
-                    let segmentation =
-                        Segmentation::from_offsets(&exec, output_offsets.slice(..)).unwrap();
+                    let (output_values, segmentation) = output.into_parts();
                     let ids = segmentation.segment_ids(&exec).unwrap();
                     exec.sync().unwrap();
                     black_box((output_values, segmentation, ids));
@@ -305,9 +285,7 @@ fn bench_round_transition(c: &mut Criterion) {
                             ),
                         )
                         .unwrap();
-                    let (output_values, output_offsets) = output.into_parts();
-                    let segmentation =
-                        Segmentation::from_offsets(&exec, output_offsets.slice(..)).unwrap();
+                    let (output_values, segmentation) = output.into_parts();
                     let ids = segmentation.segment_ids(&exec).unwrap();
                     let consumed = map(
                         &exec,
@@ -365,59 +343,9 @@ fn bench_repeated_rounds(c: &mut Criterion) {
         for rounds in [2, 8] {
             let case = format!("{rounds}r/{geometry}");
 
-            // Library-produced offsets are valid by construction. This is the
-            // raw cost floor; unlike the next two paths, its final result is not
-            // wrapped in a Segmentation.
-            group.bench_function(BenchmarkId::new("raw_offsets", &case), |b| {
-                b.iter(|| {
-                    let mut round_values = values.clone();
-                    let mut round_offsets = offsets.clone();
-                    for _ in 0..rounds {
-                        let output = ForEachSegment(FlatMap(BalancedFanout02))
-                            .run(
-                                &exec,
-                                SegmentIterator::new(
-                                    round_values.slice(..),
-                                    round_offsets.slice(..),
-                                ),
-                            )
-                            .unwrap();
-                        (round_values, round_offsets) = output.into_parts();
-                    }
-                    exec.sync().unwrap();
-                    black_box((round_values, round_offsets));
-                })
-            });
-
-            // Produces the same final abstraction as validated_segmentation,
-            // but does not reconstruct it at intermediate round boundaries.
-            group.bench_function(BenchmarkId::new("final_segmentation", &case), |b| {
-                b.iter(|| {
-                    let mut round_values = values.clone();
-                    let mut round_offsets = offsets.clone();
-                    for _ in 0..rounds {
-                        let output = ForEachSegment(FlatMap(BalancedFanout02))
-                            .run(
-                                &exec,
-                                SegmentIterator::new(
-                                    round_values.slice(..),
-                                    round_offsets.slice(..),
-                                ),
-                            )
-                            .unwrap();
-                        (round_values, round_offsets) = output.into_parts();
-                    }
-                    let segmentation =
-                        Segmentation::from_offsets(&exec, round_offsets.slice(..)).unwrap();
-                    exec.sync().unwrap();
-                    black_box((round_values, segmentation));
-                })
-            });
-
-            // The public composition reconstructs a Segmentation after every
-            // round, adding materialization, validation, and a host observation
-            // before the next round is encoded.
-            group.bench_function(BenchmarkId::new("validated_segmentation", &case), |b| {
+            // Library-produced offsets stay wrapped in Segmentation across
+            // rounds and require no validation at the round boundary.
+            group.bench_function(BenchmarkId::new("trusted_segmentation", &case), |b| {
                 b.iter(|| {
                     let mut round_values = values.clone();
                     let mut segmentation = initial_segmentation.clone();
@@ -428,9 +356,29 @@ fn bench_repeated_rounds(c: &mut Criterion) {
                                 segmentation.segments(round_values.slice(..)).unwrap(),
                             )
                             .unwrap();
-                        let (output_values, output_offsets) = output.into_parts();
+                        (round_values, segmentation) = output.into_parts();
+                    }
+                    exec.sync().unwrap();
+                    black_box((round_values, segmentation));
+                })
+            });
+
+            // Measures the validation that callers previously had to repeat
+            // before using each generated result as a Segmentation.
+            group.bench_function(BenchmarkId::new("revalidated_segmentation", &case), |b| {
+                b.iter(|| {
+                    let mut round_values = values.clone();
+                    let mut segmentation = initial_segmentation.clone();
+                    for _ in 0..rounds {
+                        let output = ForEachSegment(FlatMap(BalancedFanout02))
+                            .run(
+                                &exec,
+                                segmentation.segments(round_values.slice(..)).unwrap(),
+                            )
+                            .unwrap();
+                        let (output_values, generated) = output.into_parts();
                         segmentation =
-                            Segmentation::from_offsets(&exec, output_offsets.slice(..)).unwrap();
+                            Segmentation::from_offsets(&exec, generated.offsets()).unwrap();
                         round_values = output_values;
                     }
                     exec.sync().unwrap();

@@ -10,7 +10,7 @@ fn bench_where_indexed(c: &mut Criterion) {
         let input = exec.to_device(&common::dense_f32(len));
         let indices = exec.to_device(&common::reverse_indices(len));
         let flags = exec.to_device(&common::flags(len, 50));
-        let output = exec.alloc::<f32>(len);
+        let output = exec.alloc::<f32>(len.try_into().unwrap());
         exec.sync().unwrap();
         group.bench_function(BenchmarkId::new("gather_where", len), |b| {
             b.iter(|| {

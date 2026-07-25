@@ -181,7 +181,7 @@ unary_case!(partition, |exec, input, gpu| {
 });
 
 unary_case!(fill, |exec, input, _gpu| {
-    let output = exec.alloc::<u32>(input.len());
+    let output = exec.alloc::<u32>(input.len().try_into().unwrap());
     let value = 42_u32;
     massively::vector::fill(&exec, value, output.slice_mut(..)).unwrap();
     let mut expected = vec![0; input.len()];

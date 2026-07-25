@@ -65,11 +65,11 @@ pub(crate) use core::allocation::{RowAlloc, RowStorage};
 pub(crate) use core::arity::{A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13};
 pub(crate) use core::iter::Zip;
 pub(crate) use core::read::{
-    Column, Constant, Counting, Permute, ReadExpression, ReverseCounting, Stride, Taken, Transform,
+    Column, Constant, Counting, DivModCounting, Permute, ReadExpression, ReverseCounting, Stride,
+    Taken, Transform,
 };
 pub(crate) use core::reduce::Dispatch;
 pub(crate) use core::storage::{S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, StorageLayout};
-pub(crate) use core::transform::materialize;
 pub(crate) use core::value::MStorageElement;
 pub(crate) use core::{
     allocation, arg_reduce, arity, eval, expansion, extent, indexed, launch, merge, ordering,
@@ -102,7 +102,7 @@ pub use api::{Error, lazy, op, util};
 pub mod prelude {
     pub use crate::{
         DeviceSlice, DeviceSliceMut, DeviceVec, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut,
-        MStorage, MVec, RadixKey, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10, zip11,
-        zip12,op,flag,
+        MStorage, MVec, RadixKey, flag, op, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10,
+        zip11, zip12,
     };
 }

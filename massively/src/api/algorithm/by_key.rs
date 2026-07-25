@@ -7,46 +7,6 @@ use crate::{
     op::BinaryPredicateOp, op::ReductionOp,
 };
 
-struct SortByKeyOperation<'a, R: Runtime, Keys, Values, Less, ValueOutput> {
-    exec: &'a Executor<R>,
-    keys: Keys,
-    values: Values,
-    less: Less,
-    value_output: ValueOutput,
-}
-
-impl<R, KeyItem, Keys, Values, Less, ValueOutput> crate::api::iter::OutputOperation<R, KeyItem>
-    for SortByKeyOperation<'_, R, Keys, Values, Less, ValueOutput>
-where
-    R: Runtime,
-    KeyItem: crate::api::iter::SortAbi<R>,
-    Keys: MIter<R, Item = KeyItem>,
-    Values: MIter<R, Item = ValueOutput::Item>,
-    Less: BinaryPredicateOp<KeyItem>,
-    ValueOutput: MIterMut<R>,
-{
-    type Result = Result<(), Error>;
-
-    fn run<KeyLowered>(self, key_output: KeyLowered) -> Self::Result
-    where
-        KeyItem: crate::api::iter::KernelRow + crate::allocation::ScratchStorage<R>,
-        KeyLowered: crate::api::iter::ConcreteOutput<R, KeyItem>,
-    {
-        let ordering = crate::ordering::sort_keys_with_control(
-            self.exec,
-            crate::api::iter::lower_fixed::<R, _>(self.keys),
-            self.less,
-            key_output,
-        )?;
-        crate::api::algorithm::indexed::gather_into(
-            self.exec,
-            self.values,
-            ordering.permutation().column(),
-            self.value_output,
-        )
-    }
-}
-
 struct ByKeyScanOperation<'a, R: Runtime, Keys, Values, Equal, Item: MAlloc<R>, Op> {
     exec: &'a Executor<R>,
     keys: Keys,
@@ -284,7 +244,7 @@ where
             right: value_len as usize,
         });
     }
-    let value_output = exec.alloc::<Values::Item>(len as usize);
+    let value_output = exec.alloc::<Values::Item>(len);
     sort_values_by_key_into(exec, keys, values, less, value_output.slice_mut(..))?;
     Ok(value_output)
 }
@@ -329,7 +289,7 @@ where
             right: value_len as usize,
         });
     }
-    let value_output = exec.alloc::<Values::Item>(len as usize);
+    let value_output = exec.alloc::<Values::Item>(len);
     radix_sort_values_by_key_into(exec, keys, values, value_output.slice_mut(..))?;
     Ok(value_output)
 }
@@ -396,42 +356,6 @@ where
     crate::api::algorithm::indexed::gather_into(exec, values, permutation.column(), value_output)
 }
 
-/// Stably sorts keys and values into caller-provided storage.
-#[doc(hidden)]
-pub(crate) fn sort_by_key_into<R, Keys, Values, Less, KeyOutput, ValueOutput>(
-    exec: &Executor<R>,
-    keys: Keys,
-    values: Values,
-    less: Less,
-    key_output: KeyOutput,
-    value_output: ValueOutput,
-) -> Result<(), Error>
-where
-    R: Runtime,
-    Keys: MIter<R>,
-    Keys::Item: crate::api::iter::SortAbi<R>,
-    Values: MIter<R, Item = ValueOutput::Item>,
-    Less: BinaryPredicateOp<Keys::Item>,
-    KeyOutput: MIterMut<R, Item = Keys::Item>,
-    ValueOutput: MIterMut<R>,
-{
-    let key_len = keys.capacity()?;
-    let value_len = values.capacity()?;
-    if key_len != value_len {
-        return Err(Error::LengthMismatch {
-            left: key_len as usize,
-            right: value_len as usize,
-        });
-    }
-    key_output.run_output_operation(SortByKeyOperation {
-        exec,
-        values,
-        keys,
-        less,
-        value_output,
-    })
-}
-
 /// Computes an inclusive scan within each adjacent equal-key segment.
 ///
 /// # Examples
@@ -495,7 +419,7 @@ where
             right: value_len as usize,
         });
     }
-    let output = exec.alloc::<Values::Item>(len as usize);
+    let output = exec.alloc::<Values::Item>(len);
     inclusive_scan_by_key_into(exec, keys, values, equal, op, output.slice_mut(..))?;
     Ok(output)
 }
@@ -594,7 +518,7 @@ where
             right: value_len as usize,
         });
     }
-    let output = exec.alloc::<Values::Item>(len as usize);
+    let output = exec.alloc::<Values::Item>(len);
     let init = exec.value(init)?;
     exclusive_scan_by_key_into(exec, keys, values, equal, init, op, output.slice_mut(..))?;
     Ok(output)
@@ -697,8 +621,8 @@ where
             right: value_len as usize,
         });
     }
-    let key_output = exec.alloc::<KeyItem>(capacity as usize);
-    let value_output = exec.alloc::<ValueItem>(capacity as usize);
+    let key_output = exec.alloc::<KeyItem>(capacity);
+    let value_output = exec.alloc::<ValueItem>(capacity);
     let init = exec.value(init)?;
     let len = reduce_by_key_into(
         exec,
@@ -817,7 +741,7 @@ where
             right: value_len as usize,
         });
     }
-    let value_output = exec.alloc::<Values::Item>(capacity as usize);
+    let value_output = exec.alloc::<Values::Item>(capacity);
     let len = unique_by_key_into(exec, keys, values, equal, value_output.slice_mut(..))?;
     crate::api::iter::into_exact_prefix::<R, Values::Item>(exec, value_output, len.read(exec)?)
 }

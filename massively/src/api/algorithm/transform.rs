@@ -96,7 +96,7 @@ where
     Op: UnaryOp<Input::Item>,
     Op::Output: MAlloc<R>,
 {
-    let len = input.len()? as usize;
+    let len = input.len()?;
     let output = exec.alloc::<Op::Output>(len);
     transform_into(exec, input, op, output.slice_mut(..))?;
     Ok(output)
@@ -113,7 +113,7 @@ where
     Op: UnaryOp<Input::Item>,
     Op::Output: MAlloc<R>,
 {
-    let len = input.capacity()? as usize;
+    let len = input.capacity()?;
     let extent = input.logical_extent()?;
     let mut output = exec.alloc::<Op::Output>(len);
     transform_into(exec, input, op, output.slice_mut(..))?;

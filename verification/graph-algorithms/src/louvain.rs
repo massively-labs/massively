@@ -182,8 +182,8 @@ fn local_move<R: Runtime>(
             // The current community is always an option, even when the vertex
             // currently has no edge back into it.
             let candidate_capacity = neighbor_communities.len() + 1;
-            let candidate_communities = exec.alloc::<u32>(candidate_capacity as usize);
-            let candidate_weights = exec.alloc::<u32>(candidate_capacity as usize);
+            let candidate_communities = exec.alloc::<u32>(candidate_capacity);
+            let candidate_weights = exec.alloc::<u32>(candidate_capacity);
             vector::scatter(
                 exec,
                 neighbor_communities.slice(..),

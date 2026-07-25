@@ -145,6 +145,13 @@ where
         .collect()
 }
 
+pub fn take<T: Copy>(segments: &[Vec<T>], count: usize) -> Vec<Vec<T>> {
+    segments
+        .iter()
+        .map(|segment| segment.iter().copied().take(count).collect())
+        .collect()
+}
+
 pub fn reduce<T, Op>(segments: &[Vec<T>], _op: Op, init: T) -> Vec<T>
 where
     T: Copy,
@@ -174,6 +181,39 @@ where
                 .copied()
                 .filter(|value| Pred::apply(*value))
                 .count() as u32
+        })
+        .collect()
+}
+
+pub fn find_if<T, Pred>(segments: &[Vec<T>], _pred: Pred) -> Vec<u32>
+where
+    T: Copy,
+    Pred: PredicateOp<T>,
+{
+    segments
+        .iter()
+        .map(|segment| {
+            segment
+                .iter()
+                .copied()
+                .position(Pred::apply)
+                .unwrap_or(segment.len()) as u32
+        })
+        .collect()
+}
+
+pub fn adjacent_find<T, Equal>(segments: &[Vec<T>], _equal: Equal) -> Vec<u32>
+where
+    T: Copy,
+    Equal: BinaryPredicateOp<T>,
+{
+    segments
+        .iter()
+        .map(|segment| {
+            segment
+                .windows(2)
+                .position(|pair| Equal::apply(pair[0], pair[1]))
+                .unwrap_or(segment.len()) as u32
         })
         .collect()
 }

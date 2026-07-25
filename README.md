@@ -7,15 +7,23 @@
 
 ----
 
-**Multi-platform GPU parallel algorithms for Rust.**
+**Composable GPU parallel primitives for Rust.**
 
 </div>
 
 ## Overview
 
-`massively` provides Thrust-style parallel algorithms for device-resident data
-on top of [CubeCL](https://github.com/tracel-ai/cubecl). The same algorithm API
-can run on WGPU, CUDA, or HIP through the corresponding CubeCL runtime.
+`massively` provides optimized, Thrust-style parallel primitives for
+device-resident data on top of
+[CubeCL](https://github.com/tracel-ai/cubecl). The same API can run on WGPU,
+CUDA, or HIP through the corresponding CubeCL runtime.
+
+Massively is designed for building complex GPU applications by composing a
+small set of general-purpose building blocks. It does not try to provide a
+separate, domain-specific algorithm for every application. Instead,
+application logic is expressed by combining vector algorithms, segmented
+algorithms, lazy iterators, and user-defined operations. Optimizing these shared
+primitives benefits every application assembled from them.
 
 The algorithms are organized into two complementary families:
 
@@ -25,16 +33,16 @@ The algorithms are organized into two complementary families:
   independently to offset-delimited regions
 
 Memory movement is explicit, outputs are preallocated, and user-defined
-operations are compiled into GPU kernels. Lazy maps, permutations, and
-reversed views can be consumed without first materializing an intermediate
-buffer.
+operations are compiled into GPU kernels. Lazy maps, permutations, reversed
+views, repetitions, tiling, and adjacent differences can be consumed without
+first materializing an intermediate buffer.
 
 The public API is built around a few ideas:
 
 - explicit host/device transfer through `Executor`
 - owning device storage through `DeviceVec` and zero-copy views through
   `DeviceSlice` and `DeviceSliceMut`
-- logical row values assembled with `zip2` through `zip7`
+- logical row values assembled with `zip2` through `zip12`
 - CubeCL-backed operations under `massively::op`, such as `UnaryOp`,
   `ExpandOp`, `PredicateOp`, and `ReductionOp`
 - parallel algorithms under `massively::vector`, such as `map`, `reduce`,
@@ -42,6 +50,28 @@ The public API is built around a few ideas:
   variants
 - offset-delimited algorithms and the reusable `Segmentation` abstraction
   under `massively::seg`
+
+## Composition First
+
+The unit of reuse in Massively is an optimized primitive, not an end-to-end
+domain algorithm. Applications construct pipelines from a few orthogonal
+pieces:
+
+- `lazy` iterators describe transformations and indexed views without
+  materializing intermediate buffers
+- `vector` algorithms provide global movement, selection, ordering, scans, and
+  reductions
+- `seg` applies the same kinds of operations independently to variable-length
+  regions
+- operations defined with CubeCL carry application-specific logic into the
+  generated GPU kernels
+
+These pieces compose across single- and multi-column data. Intermediate values
+can remain lazy where possible, while explicit storage and synchronization
+boundaries keep data movement visible. More specialized behavior should be
+assembled from these parts so that the public API stays compact and
+improvements to a primitive carry through to the larger applications that use
+it.
 
 ## Setup
 
@@ -88,21 +118,6 @@ fn main() -> Result<(), massively::Error> {
     Ok(())
 }
 ```
-
-## Composing Graph Algorithms
-
-Massively deliberately has no graph-specific execution layer. CSR rows are a
-`seg::Segmentation`; source IDs come from `segment_ids`, destination and edge
-data are lazy permutations, dense row aggregation uses
-`ForEachSegment<Reduce<...>>`, sparse frontier expansion uses `vector::flat_map`,
-and colliding proposals use the ordinary by-key and scatter-reduce algorithms.
-
-The [`graph-algorithms`](verification/graph-algorithms/) verification crate
-builds 19 complete graph algorithms from those public vector, lazy, and segment
-primitives. Its generated property tests compare every implementation with an
-independent CPU reference. This is practical coverage evidence for the
-primitive set, while keeping topology policy and graph-specific data structures
-outside the reusable library API.
 
 ## Core Completeness Artifact
 
@@ -204,6 +219,9 @@ MStorage::into_columns(output3)        = (DeviceVec<A>, DeviceVec<B>, DeviceVec<
 lazy::map(input, op)                   = fused lazy computation
 lazy::permute(values, indices)         = lazy indexed view
 lazy::reverse(input)                    = lazy reversed view
+lazy::repeat_each(input, count)         = lazy per-item repetition
+lazy::tile(input, count)                = lazy whole-input repetition
+lazy::adjacent_difference(input, op)    = lazy neighboring computation
 ```
 
 Input and output items support up to twelve columns. Keys passed to by-key
@@ -227,7 +245,8 @@ Offsets are the canonical form. They are compact, preserve empty segments, and
 give direct segment bounds. `Segmentation::from_lengths`,
 `Segmentation::from_segment_ids`, and `Segmentation::from_offsets` validate and
 privately materialize this form. `lengths()` and `segment_ids()` derive owned
-device columns when needed, while `offsets()` is a read-only zero-copy view.
+device columns when needed, `local_indices()` derives each entry's zero-based
+position inside its segment, and `offsets()` is a read-only zero-copy view.
 
 IDs alone cannot encode trailing or all-empty segments, so
 `from_segment_ids` also takes the segment count. For example,
@@ -235,8 +254,10 @@ IDs alone cannot encode trailing or all-empty segments, so
 and offsets `[0, 1, 1, 3, 3]`.
 
 The same segmentation can be applied to any equally long single- or
-multi-column value iterator with `segments(values)`. It also supports
-segment-wise context broadcast without a special algorithm:
+multi-column value iterator with `segments(values)`. The resulting
+`SegmentIterator` retains the validated `Segmentation`; length-preserving
+algorithms preserve it and length-changing owned results rebuild one. It also
+supports segment-wise context broadcast without a special algorithm:
 
 ```rust,ignore
 let ids = segmentation.segment_ids(&exec)?;
@@ -273,10 +294,16 @@ optimization; it does not require another public iteration abstraction.
 
 ### Lazy Iterators
 
-`lazy::constant`, `lazy::counting`, `lazy::map`, `lazy::permute`, and
-`lazy::reverse` produce `MIter` values without allocating result storage. Their
-expressions are evaluated by the consuming algorithm, allowing operations to be
-composed while keeping intermediate values off device memory.
+`lazy::constant`, `lazy::counting`, `lazy::stride`, `lazy::map`,
+`lazy::permute`, `lazy::reverse`, `lazy::repeat_each`, `lazy::tile`, and
+`lazy::adjacent_difference` produce `MIter` values without allocating result
+storage. Their expressions are evaluated by the consuming algorithm, allowing
+operations to be composed while keeping intermediate values off device memory.
+
+Segment operations are selected with `ForEachSegment`. In addition to mapping,
+scanning, reduction, sorting, and filtering, `Take(n)` keeps a bounded prefix
+of every segment. `FindIf(pred)` and `AdjacentFind(equal)` return a local index
+per segment, using the segment length when no match exists.
 
 ### Operations
 
@@ -296,19 +323,15 @@ Use `flag::from_bool` to turn a CubeCL comparison into canonical 0/1, and
 ## Design Notes
 
 The implementation favors reusable primitives such as scan, selection,
-permutation, and segmented control over one-off algorithm kernels. This keeps
-the API surface compact and lets improvements to core primitives benefit many
-algorithms.
+permutation, and segmented control over application-specific kernels. Complex
+behavior belongs in compositions of these building blocks. This keeps the API
+surface compact, avoids duplicating optimization work, and lets improvements to
+core primitives benefit complete applications.
 
 Multi-column support is a first-class requirement. The code avoids
 single-column-only shortcuts and avoids arity explosion by separating control
 generation from payload movement where possible, especially in by-key
 algorithms.
-
-Graph algorithms follow the same principle without adding a graph-specific
-public layer: CSR partitioning, frontier expansion, conflict resolution, and
-state updates are direct compositions of `seg`, `lazy`, and `vector`
-primitives.
 
 ## Further Reading
 
@@ -316,20 +339,6 @@ primitives.
 
 Every public algorithm has a runnable, single-column example in the
 [API documentation](https://docs.rs/massively). Integration tests are grouped
-under `massively/tests/vector` and `massively/tests/seg`.
-Their
-oracle tests compare public functions against CPU AoS references and cover the
-full map input/output arity matrix. Complete graph algorithm oracles live
-under `verification/graph-algorithms/tests` and compare every algorithm with
-independent CPU implementations on generated CSR graphs.
-
-### Graph Algorithms
-
-Complete algorithms composed from vector and segment primitives, together with
-generated property tests and end-to-end benchmarks, live in the
-`graph-algorithms` verification crate.
-
-```sh
-cargo nextest run -p graph-algorithms --test oracle
-cargo bench -p graph-algorithms --bench algorithms
-```
+under `massively/tests/vector` and `massively/tests/seg`. Their oracle tests
+compare public functions against CPU AoS references and cover the full map
+input/output arity matrix.

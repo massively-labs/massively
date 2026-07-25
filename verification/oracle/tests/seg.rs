@@ -4,9 +4,9 @@ mod common;
 
 use cubecl::prelude::*;
 use massively::seg::{
-    AdjacentDifference, AllOf, AnyOf, CountIf, ExclusiveScan, Executable, Filter, ForEachSegment,
-    InclusiveScan, IsSorted, IsSortedUntil, Map, NoneOf, Reduce, Reverse, SegmentIterator, Sort,
-    Unique,
+    AdjacentDifference, AdjacentFind, AllOf, AnyOf, CountIf, ExclusiveScan, Executable, Filter,
+    FindIf, ForEachSegment, InclusiveScan, IsSorted, IsSortedUntil, Map, NoneOf, Reduce, Reverse,
+    SegmentIterator, Sort, Take, Unique,
 };
 use massively::{
     MStorage, op::BinaryPredicateOp, op::PredicateOp, op::ReductionOp, op::UnaryOp, zip2,
@@ -87,7 +87,10 @@ macro_rules! compacting_case {
                 ).unwrap();
                 let (expected_values, expected_offsets) = flatten(&$oracle(&segments));
                 prop_assert_eq!(exec.to_host(output.values()).unwrap(), expected_values);
-                prop_assert_eq!(exec.to_host(output.offsets()).unwrap(), expected_offsets);
+                prop_assert_eq!(
+                    exec.to_host(&output.offsets().offsets()).unwrap(),
+                    expected_offsets,
+                );
             }
         }
     };
@@ -141,6 +144,7 @@ compacting_case!(seg_unique, Unique(Equal), |segments| reference::unique(
 compacting_case!(seg_filter, Filter(Even), |segments| reference::filter(
     segments, Even
 ));
+compacting_case!(seg_take, Take(37), |segments| reference::take(segments, 37));
 
 summarizing_case!(
     seg_reduce,
@@ -149,6 +153,12 @@ summarizing_case!(
 );
 summarizing_case!(seg_count_if, |_| CountIf(Even), |segments| {
     reference::count_if(segments, Even)
+});
+summarizing_case!(seg_find_if, |_| FindIf(Even), |segments| {
+    reference::find_if(segments, Even)
+});
+summarizing_case!(seg_adjacent_find, |_| AdjacentFind(Equal), |segments| {
+    reference::adjacent_find(segments, Equal)
 });
 summarizing_case!(seg_all_of, |_| AllOf(Even), |segments| expected_flags(
     reference::all_of(segments, Even)
@@ -341,7 +351,10 @@ macro_rules! pair_compacting_case {
                     pair_rows(output_first, output_second),
                     expected,
                 );
-                prop_assert_eq!(exec.to_host(output.offsets()).unwrap(), expected_offsets);
+                prop_assert_eq!(
+                    exec.to_host(&output.offsets().offsets()).unwrap(),
+                    expected_offsets,
+                );
             }
         }
     };
@@ -435,6 +448,9 @@ pair_compacting_case!(seg_pair_unique, Unique(PairEqual), |segments| {
 pair_compacting_case!(seg_pair_filter, Filter(PairEven), |segments| {
     reference::filter(segments, PairEven)
 });
+pair_compacting_case!(seg_pair_take, Take(37), |segments| reference::take(
+    segments, 37
+));
 
 pair_item_reduce_case!(seg_pair_reduce, |_| Reduce(PairSum, (7, 11)), |segments| {
     reference::reduce(segments, PairSum, (7, 11))
@@ -442,6 +458,14 @@ pair_item_reduce_case!(seg_pair_reduce, |_| Reduce(PairSum, (7, 11)), |segments|
 pair_flag_reduce_case!(seg_pair_count_if, CountIf(PairEven), |segments| {
     reference::count_if(segments, PairEven)
 });
+pair_flag_reduce_case!(seg_pair_find_if, FindIf(PairEven), |segments| {
+    reference::find_if(segments, PairEven)
+});
+pair_flag_reduce_case!(
+    seg_pair_adjacent_find,
+    AdjacentFind(PairEqual),
+    |segments| { reference::adjacent_find(segments, PairEqual) }
+);
 pair_flag_reduce_case!(seg_pair_all_of, AllOf(PairEven), |segments| {
     expected_flags(reference::all_of(segments, PairEven))
 });

@@ -118,9 +118,9 @@ pub fn solve<R: Runtime>(
         let candidate_count = pair_count
             .checked_add(n)
             .expect("label candidate count exceeds u32");
-        let candidate_sources = exec.alloc::<u32>(candidate_count as usize);
-        let candidate_counts = exec.alloc::<u32>(candidate_count as usize);
-        let candidate_labels = exec.alloc::<u32>(candidate_count as usize);
+        let candidate_sources = exec.alloc::<u32>(candidate_count);
+        let candidate_counts = exec.alloc::<u32>(candidate_count);
+        let candidate_labels = exec.alloc::<u32>(candidate_count);
         vector::copy(
             exec,
             pair_sources.slice(..),

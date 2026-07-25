@@ -8,8 +8,4 @@ impl<X, Y> Zip<X, Y> {
     pub(crate) const fn new(left: X, right: Y) -> Self {
         Self(left, right)
     }
-
-    pub(crate) fn into_parts(self) -> (X, Y) {
-        (self.0, self.1)
-    }
 }

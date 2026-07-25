@@ -124,7 +124,7 @@ pub fn solve<R: Runtime>(
     assert!(lambda >= 0.0);
     assert_eq!(signal.len(), n.checked_mul(signal_count).unwrap());
     if graph.edge_count() == 0 {
-        let output = exec.alloc::<f32>(signal.len() as usize);
+        let output = exec.alloc::<f32>(signal.len());
         vector::copy(exec, signal.slice(..), output.slice_mut(..))?;
         return Ok(output);
     }
@@ -195,9 +195,9 @@ pub fn solve<R: Runtime>(
         MatrixIndex,
     )?;
 
-    let mut current = exec.alloc::<f32>(signal.len() as usize);
+    let mut current = exec.alloc::<f32>(signal.len());
     vector::copy(exec, signal.slice(..), current.slice_mut(..))?;
-    let mut extrapolated = exec.alloc::<f32>(signal.len() as usize);
+    let mut extrapolated = exec.alloc::<f32>(signal.len());
     vector::copy(exec, signal.slice(..), extrapolated.slice_mut(..))?;
     let mut dual = common::filled(exec, edge_features as usize, 0.0f32)?;
 

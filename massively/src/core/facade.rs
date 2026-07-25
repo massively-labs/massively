@@ -2,7 +2,7 @@
 
 use cubecl::prelude::Runtime;
 
-use crate::{Error, Zip};
+use crate::Error;
 
 /// Exact-arity form of a logical iterator read.
 ///
@@ -117,158 +117,18 @@ where
     type StorageArity = <<Leaves as crate::output::OutputSlotLayout>::Slots as crate::output::OutputSlotEnvironment>::StorageArity;
 }
 
-pub trait IterLength {
-    fn logical_len(&self) -> Result<usize, Error>;
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        Ok(crate::extent::LogicalExtent::fixed(self.logical_len()?))
-    }
-}
-
-impl<T> IterLength for crate::read::Column<T>
+pub(crate) fn logical_len<R, Input>(input: &Input) -> Result<usize, Error>
 where
-    T: crate::MStorageElement,
+    R: Runtime,
+    Input: KernelInput<R>,
 {
-    fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.capacity())
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        Ok(self.extent.clone())
-    }
+    <Input as crate::reduce::StageRead<R, crate::read::Env0>>::logical_len(input)
 }
 
-impl<T> IterLength for crate::read::Constant<T> {
-    fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.len)
-    }
-}
-
-impl IterLength for crate::read::Counting {
-    fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.len)
-    }
-}
-
-impl IterLength for crate::read::Stride {
-    fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.len)
-    }
-}
-
-impl IterLength for crate::read::ReverseCounting {
-    fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.len)
-    }
-}
-
-impl<Source> IterLength for crate::read::Taken<Source> {
-    fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.len as usize)
-    }
-}
-
-impl<Left, Right> IterLength for Zip<Left, Right>
+pub(crate) fn logical_extent<R, Input>(input: &Input) -> Result<crate::extent::LogicalExtent, Error>
 where
-    Left: IterLength,
-    Right: IterLength,
+    R: Runtime,
+    Input: KernelInput<R>,
 {
-    fn logical_len(&self) -> Result<usize, Error> {
-        let left = self.0.logical_len()?;
-        let right = self.1.logical_len()?;
-        if left == right {
-            Ok(left)
-        } else {
-            Err(Error::LengthMismatch { left, right })
-        }
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        self.0.logical_extent()?.zipped(&self.1.logical_extent()?)
-    }
-}
-
-impl<Values, Offsets> IterLength for crate::seg::SegmentRead<Values, Offsets>
-where
-    Offsets: IterLength,
-{
-    fn logical_len(&self) -> Result<usize, Error> {
-        Ok(self.offsets().logical_len()?.saturating_sub(1))
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        Ok(self
-            .offsets()
-            .logical_extent()?
-            .slice(1, self.logical_len()?))
-    }
-}
-
-impl<Input, Op> IterLength for crate::read::Transform<Input, Op>
-where
-    Input: IterLength,
-{
-    fn logical_len(&self) -> Result<usize, Error> {
-        self.input.logical_len()
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        self.input.logical_extent()
-    }
-}
-
-impl<Input, Op> IterLength for crate::read::Adjacent<Input, Op>
-where
-    Input: IterLength,
-{
-    fn logical_len(&self) -> Result<usize, Error> {
-        self.input.logical_len()
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        self.input.logical_extent()
-    }
-}
-
-impl<Values, Indices> IterLength for crate::read::Permute<Values, Indices>
-where
-    Indices: IterLength,
-{
-    fn logical_len(&self) -> Result<usize, Error> {
-        self.indices.logical_len()
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        self.indices.logical_extent()
-    }
-}
-
-impl<Values> IterLength for crate::read::Reverse<Values>
-where
-    Values: IterLength,
-{
-    fn logical_len(&self) -> Result<usize, Error> {
-        match self.len {
-            Some(len) => Ok(len),
-            None => self.values.logical_len(),
-        }
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        let capacity = self.logical_len()?;
-        Ok(self.values.logical_extent()?.slice(self.offset, capacity))
-    }
-}
-
-impl<Runtime, Input> IterLength for crate::read::Slice<Runtime, Input>
-where
-    Input: IterLength,
-{
-    fn logical_len(&self) -> Result<usize, Error> {
-        self.input.logical_len()
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        self.input.logical_extent()
-    }
+    <Input as crate::reduce::StageRead<R, crate::read::Env0>>::logical_extent(input)
 }

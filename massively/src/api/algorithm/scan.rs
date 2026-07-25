@@ -101,7 +101,7 @@ where
     Item: MAlloc<R>,
     Op: ReductionOp<Item>,
 {
-    let len = input.len()? as usize;
+    let len = input.len()?;
     let output = exec.alloc::<Item>(len);
     inclusive_scan_into(exec, input, op, output.slice_mut(..))?;
     Ok(output)
@@ -159,7 +159,7 @@ where
     Item: MAlloc<R>,
     Op: ReductionOp<Item>,
 {
-    let len = input.len()? as usize;
+    let len = input.len()?;
     let output = exec.alloc::<Item>(len);
     adjacent_difference_into(exec, input, op, output.slice_mut(..))?;
     Ok(output)
@@ -218,7 +218,7 @@ where
     Item: MAlloc<R>,
     Op: ReductionOp<Item>,
 {
-    let len = input.len()? as usize;
+    let len = input.len()?;
     let output = exec.alloc::<Item>(len);
     output
         .slice_mut(..)
