@@ -6,8 +6,9 @@ use cubecl::prelude::*;
 
 use crate::{DeviceVec, Error, Executor, MIndex};
 
+#[doc(hidden)]
 #[derive(Clone)]
-pub(crate) struct DeviceExtentSource {
+pub struct DeviceExtentSource {
     handle: cubecl::server::Handle,
     owner: u64,
     upper_bound: usize,
@@ -21,11 +22,11 @@ pub(crate) struct DeviceExtentSource {
 /// scalar back: the represented value is
 /// `min(source.saturating_sub(start), limit)`.
 ///
-/// This metadata is never used to make a public owned vector appear smaller
-/// than its allocation. Public length-changing APIs compact their initialized
-/// prefix into exact storage before returning.
+/// Public owned vectors retain this metadata when a length-changing algorithm
+/// returns an initialized prefix inside an upper-bound allocation.
+#[doc(hidden)]
 #[derive(Clone)]
-pub(crate) enum LogicalExtent {
+pub enum LogicalExtent {
     Fixed(usize),
     Device {
         source: Arc<DeviceExtentSource>,

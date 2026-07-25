@@ -301,7 +301,13 @@ mod tests {
         let input: DeviceVec<_, u32> = exec.to_device(&[1_u32, 2, 3, 4]);
         let output = exec.to_device(&[99_u32; 6]);
 
-        transform_fixed(&exec, input.slice(1..4), Double, output.slice_mut(2..5)).unwrap();
+        transform_fixed(
+            &exec,
+            input.slice_usize(1..4),
+            Double,
+            output.slice_mut_usize(2..5),
+        )
+        .unwrap();
 
         assert_eq!(exec.to_host(&output).unwrap(), vec![99, 99, 4, 6, 8, 99]);
     }

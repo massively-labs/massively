@@ -342,13 +342,16 @@ proptest! {
 
         let zero = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         prop_assert_eq!(
-            massively::vector::reduce(
+            read_value(
                 &exec,
-                lazify(zip12_columns!(device)),
-                zero,
-                MaxTwelve,
-            )
-            .unwrap(),
+                massively::vector::reduce(
+                    &exec,
+                    lazify(zip12_columns!(device)),
+                    zero,
+                    MaxTwelve,
+                )
+                .unwrap(),
+            ),
             reference::reduce(&input_rows, zero, MaxTwelve),
         );
 

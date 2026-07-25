@@ -166,15 +166,15 @@ impl BinaryPredicateOp<u32> for LessU32 {
 
 pub(crate) struct SegmentOffsets<R: Runtime> {
     pub(crate) offsets: DeviceVec<R, u32>,
-    pub(crate) segment_count: usize,
-    pub(crate) value_len: usize,
+    pub(crate) segment_count: MIndex,
+    pub(crate) value_len: MIndex,
 }
 
 impl<R: Runtime> SegmentOffsets<R> {
     pub(crate) fn new<Offsets>(
         exec: &Executor<R>,
         offsets: Offsets,
-        value_len: usize,
+        value_len: MIndex,
     ) -> Result<Self, Error>
     where
         Offsets: MIter<R, Item = MIndex>,
@@ -183,8 +183,10 @@ impl<R: Runtime> SegmentOffsets<R> {
         Self::from_materialized(offsets, value_len)
     }
 
-    fn from_materialized(offsets: DeviceVec<R, u32>, value_len: usize) -> Result<Self, Error> {
-        let segment_count = super::segment_count(offsets.capacity())?;
+    fn from_materialized(offsets: DeviceVec<R, u32>, value_len: MIndex) -> Result<Self, Error> {
+        let Some(segment_count) = offsets.len().checked_sub(1) else {
+            return Err(Error::LengthMismatch { left: 1, right: 0 });
+        };
         Ok(Self {
             offsets,
             segment_count,
@@ -221,15 +223,15 @@ impl<R: Runtime> SegmentOffsets<R> {
 pub(crate) struct SegmentControl<R: Runtime> {
     pub(crate) offsets: DeviceVec<R, u32>,
     pub(crate) heads: DeviceVec<R, u32>,
-    pub(crate) segment_count: usize,
-    pub(crate) value_len: usize,
+    pub(crate) segment_count: MIndex,
+    pub(crate) value_len: MIndex,
 }
 
 impl<R: Runtime> SegmentControl<R> {
     pub(crate) fn new<Offsets>(
         exec: &Executor<R>,
         offsets: Offsets,
-        value_len: usize,
+        value_len: MIndex,
     ) -> Result<Self, Error>
     where
         Offsets: MIter<R, Item = MIndex>,
@@ -241,7 +243,7 @@ impl<R: Runtime> SegmentControl<R> {
     pub(crate) fn from_materialized(
         exec: &Executor<R>,
         offsets: DeviceVec<R, u32>,
-        value_len: usize,
+        value_len: MIndex,
     ) -> Result<Self, Error> {
         let offsets = SegmentOffsets::from_materialized(offsets, value_len)?;
         Self::from_offsets(exec, offsets)
@@ -253,19 +255,19 @@ impl<R: Runtime> SegmentControl<R> {
             segment_count,
             value_len,
         } = offsets;
-        let zero = exec.value(0u32)?;
-        let heads = exec.full_value(value_len, &zero)?;
+        let heads = exec.alloc::<u32>(value_len);
+        crate::vector::fill(exec, 0u32, heads.slice_mut(..))?;
 
         if segment_count != 0 && value_len != 0 {
-            let segment_count_u32 = u32::try_from(segment_count)
-                .map_err(|_| Error::LengthTooLarge { len: segment_count })?;
             let segment_count_handle = exec
                 .client()
-                .create_from_slice(u32::as_bytes(&[segment_count_u32]));
+                .create_from_slice(u32::as_bytes(&[segment_count]));
             unsafe {
                 mark_segment_heads_kernel::launch_unchecked::<R>(
                     exec.client(),
-                    crate::launch::cube_count_1d(segment_count.div_ceil(BLOCK_SIZE as usize))?,
+                    crate::launch::cube_count_1d(
+                        (segment_count as usize).div_ceil(BLOCK_SIZE as usize),
+                    )?,
                     CubeDim::new_1d(BLOCK_SIZE),
                     BufferArg::from_raw_parts(offsets.handle.clone(), offsets.capacity()),
                     BufferArg::from_raw_parts(segment_count_handle, 1),
@@ -288,7 +290,7 @@ impl<R: Runtime> SegmentControl<R> {
     /// full-length scan. Only operations that need random access to both
     /// segment bounds request ids.
     pub(crate) fn ids(&self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error> {
-        let ids = exec.alloc::<u32>(crate::api::iter::logical_len(self.value_len)?);
+        let ids = exec.alloc::<u32>(self.value_len);
         if self.value_len != 0 {
             crate::vector::inclusive_scan_into(
                 exec,
@@ -301,19 +303,19 @@ impl<R: Runtime> SegmentControl<R> {
     }
 
     pub(crate) fn reverse_indices(&self, exec: &Executor<R>) -> Result<DeviceVec<R, u32>, Error> {
-        let indices = exec.alloc::<u32>(crate::api::iter::logical_len(self.value_len)?);
+        let indices = exec.alloc::<u32>(self.value_len);
         if self.value_len == 0 {
             return Ok(indices);
         }
         let ids = self.ids(exec)?;
-        let len = u32::try_from(self.value_len).map_err(|_| Error::LengthTooLarge {
-            len: self.value_len,
-        })?;
+        let len = self.value_len;
         let len_handle = exec.client().create_from_slice(u32::as_bytes(&[len]));
         unsafe {
             reverse_indices_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(self.value_len.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (self.value_len as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(self.offsets.handle.clone(), self.offsets.capacity()),
                 BufferArg::from_raw_parts(ids.handle.clone(), ids.capacity()),
@@ -329,23 +331,23 @@ impl<R: Runtime> SegmentControl<R> {
         exec: &Executor<R>,
         flags: &DeviceVec<R, u32>,
     ) -> Result<(), Error> {
-        if flags.capacity() != self.value_len {
+        if flags.len() != self.value_len {
             return Err(Error::LengthMismatch {
-                left: self.value_len,
+                left: self.value_len as usize,
                 right: flags.capacity(),
             });
         }
         if self.value_len == 0 {
             return Ok(());
         }
-        let len = u32::try_from(self.value_len).map_err(|_| Error::LengthTooLarge {
-            len: self.value_len,
-        })?;
+        let len = self.value_len;
         let len_handle = exec.client().create_from_slice(u32::as_bytes(&[len]));
         unsafe {
             merge_head_flags_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(self.value_len.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (self.value_len as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(self.heads.handle.clone(), self.heads.capacity()),
                 BufferArg::from_raw_parts(len_handle, 1),
@@ -360,23 +362,23 @@ impl<R: Runtime> SegmentControl<R> {
         exec: &Executor<R>,
         flags: &DeviceVec<R, u32>,
     ) -> Result<(), Error> {
-        if flags.capacity() != self.value_len {
+        if flags.len() != self.value_len {
             return Err(Error::LengthMismatch {
-                left: self.value_len,
+                left: self.value_len as usize,
                 right: flags.capacity(),
             });
         }
         if self.value_len == 0 {
             return Ok(());
         }
-        let len = u32::try_from(self.value_len).map_err(|_| Error::LengthTooLarge {
-            len: self.value_len,
-        })?;
+        let len = self.value_len;
         let len_handle = exec.client().create_from_slice(u32::as_bytes(&[len]));
         unsafe {
             clear_head_flags_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(self.value_len.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (self.value_len as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(self.heads.handle.clone(), self.heads.capacity()),
                 BufferArg::from_raw_parts(len_handle, 1),
@@ -391,21 +393,20 @@ impl<R: Runtime> SegmentControl<R> {
         exec: &Executor<R>,
         count: MIndex,
     ) -> Result<DeviceVec<R, u32>, Error> {
-        let flags = exec.alloc::<u32>(crate::api::iter::logical_len(self.value_len)?);
+        let flags = exec.alloc::<u32>(self.value_len);
         if self.value_len == 0 {
             return Ok(flags);
         }
         let ids = self.ids(exec)?;
-        let len = u32::try_from(self.value_len).map_err(|_| Error::LengthTooLarge {
-            len: self.value_len,
-        })?;
         let parameters = exec
             .client()
-            .create_from_slice(u32::as_bytes(&[len, count]));
+            .create_from_slice(u32::as_bytes(&[self.value_len, count]));
         unsafe {
             take_flags_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(self.value_len.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (self.value_len as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(self.offsets.handle.clone(), self.offsets.capacity()),
                 BufferArg::from_raw_parts(ids.handle.clone(), ids.capacity()),
@@ -422,27 +423,26 @@ impl<R: Runtime> SegmentControl<R> {
         matches: &DeviceVec<R, u32>,
         index_adjustment: MIndex,
     ) -> Result<DeviceVec<R, u32>, Error> {
-        if matches.capacity() != self.value_len {
+        if matches.len() != self.value_len {
             return Err(Error::LengthMismatch {
-                left: self.value_len,
+                left: self.value_len as usize,
                 right: matches.capacity(),
             });
         }
-        let candidates = exec.alloc::<u32>(crate::api::iter::logical_len(self.value_len)?);
+        let candidates = exec.alloc::<u32>(self.value_len);
         if self.value_len == 0 {
             return Ok(candidates);
         }
         let ids = self.ids(exec)?;
-        let len = u32::try_from(self.value_len).map_err(|_| Error::LengthTooLarge {
-            len: self.value_len,
-        })?;
         let parameters = exec
             .client()
-            .create_from_slice(u32::as_bytes(&[len, index_adjustment]));
+            .create_from_slice(u32::as_bytes(&[self.value_len, index_adjustment]));
         unsafe {
             match_candidates_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(self.value_len.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (self.value_len as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(self.offsets.handle.clone(), self.offsets.capacity()),
                 BufferArg::from_raw_parts(ids.handle.clone(), ids.capacity()),
@@ -459,25 +459,25 @@ impl<R: Runtime> SegmentControl<R> {
         exec: &Executor<R>,
         breaks: &DeviceVec<R, u32>,
     ) -> Result<DeviceVec<R, u32>, Error> {
-        if breaks.capacity() != self.value_len {
+        if breaks.len() != self.value_len {
             return Err(Error::LengthMismatch {
-                left: self.value_len,
+                left: self.value_len as usize,
                 right: breaks.capacity(),
             });
         }
-        let candidates = exec.alloc::<u32>(crate::api::iter::logical_len(self.value_len)?);
+        let candidates = exec.alloc::<u32>(self.value_len);
         if self.value_len == 0 {
             return Ok(candidates);
         }
         let ids = self.ids(exec)?;
-        let len = u32::try_from(self.value_len).map_err(|_| Error::LengthTooLarge {
-            len: self.value_len,
-        })?;
+        let len = self.value_len;
         let len_handle = exec.client().create_from_slice(u32::as_bytes(&[len]));
         unsafe {
             sorted_until_candidates_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(self.value_len.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (self.value_len as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(self.offsets.handle.clone(), self.offsets.capacity()),
                 BufferArg::from_raw_parts(self.heads.handle.clone(), self.heads.capacity()),
@@ -495,27 +495,26 @@ impl<R: Runtime> SegmentControl<R> {
         exec: &Executor<R>,
         reduced: &DeviceVec<R, u32>,
     ) -> Result<DeviceVec<R, u32>, Error> {
-        if reduced.capacity() != self.segment_count {
+        if reduced.len() != self.segment_count {
             return Err(Error::LengthMismatch {
-                left: self.segment_count,
+                left: self.segment_count as usize,
                 right: reduced.capacity(),
             });
         }
-        let output = exec.alloc::<u32>(crate::api::iter::logical_len(self.segment_count)?);
+        let output = exec.alloc::<u32>(self.segment_count);
         if self.segment_count == 0 {
             return Ok(output);
         }
-        let segment_count =
-            u32::try_from(self.segment_count).map_err(|_| Error::LengthTooLarge {
-                len: self.segment_count,
-            })?;
+        let segment_count = self.segment_count;
         let segment_count_handle = exec
             .client()
             .create_from_slice(u32::as_bytes(&[segment_count]));
         unsafe {
             finish_sorted_until_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(self.segment_count.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (self.segment_count as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(self.offsets.handle.clone(), self.offsets.capacity()),
                 BufferArg::from_raw_parts(reduced.handle.clone(), reduced.capacity()),
@@ -556,8 +555,8 @@ impl<R: Runtime> SegmentControl<R> {
 fn compact_with_offsets<R, Input, Output, OutputOffsets>(
     exec: &Executor<R>,
     offsets: &DeviceVec<R, u32>,
-    segment_count: usize,
-    value_len: usize,
+    segment_count: MIndex,
+    value_len: MIndex,
     input: Input,
     flags: DeviceVec<R, u32>,
     output: Output,
@@ -570,21 +569,24 @@ where
     OutputOffsets: MIterMut<R, Item = MIndex>,
 {
     let positions = crate::core::scan::inclusive_scan_u32(exec, &flags)?;
-    let offset_count = segment_count + 1;
+    let offset_count = segment_count
+        .checked_add(1)
+        .ok_or(Error::LengthTooLarge { len: usize::MAX })?;
     let selected_offsets = if value_len == 0 {
-        let zero = exec.value(0u32)?;
-        exec.full_value(offset_count, &zero)?
+        let selected_offsets = exec.alloc::<u32>(offset_count);
+        crate::vector::fill(exec, 0u32, selected_offsets.slice_mut(..))?;
+        selected_offsets
     } else {
-        let selected_offsets = exec.alloc::<u32>(crate::api::iter::logical_len(offset_count)?);
-        let offset_count_u32 =
-            u32::try_from(offset_count).map_err(|_| Error::LengthTooLarge { len: offset_count })?;
+        let selected_offsets = exec.alloc::<u32>(offset_count);
         let offset_count_handle = exec
             .client()
-            .create_from_slice(u32::as_bytes(&[offset_count_u32]));
+            .create_from_slice(u32::as_bytes(&[offset_count]));
         unsafe {
             selected_offsets_kernel::launch_unchecked::<R>(
                 exec.client(),
-                crate::launch::cube_count_1d(offset_count.div_ceil(BLOCK_SIZE as usize))?,
+                crate::launch::cube_count_1d(
+                    (offset_count as usize).div_ceil(BLOCK_SIZE as usize),
+                )?,
                 CubeDim::new_1d(BLOCK_SIZE),
                 BufferArg::from_raw_parts(offsets.handle.clone(), offsets.capacity()),
                 BufferArg::from_raw_parts(positions.handle.clone(), positions.capacity()),

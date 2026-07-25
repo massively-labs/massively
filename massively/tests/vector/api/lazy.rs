@@ -2,8 +2,8 @@ use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::seg::{Segment, SegmentIterator};
 use massively::{
-    Executor, MIter, MStorage, lazy, op::ReductionOp, op::UnaryOp, vector::gather, vector::map,
-    vector::reduce, zip2, zip7,
+    Executor, MIter, MStorage, MVal, lazy, op::ReductionOp, op::UnaryOp, vector::gather,
+    vector::map, vector::reduce, zip2, zip7,
 };
 
 struct Double;
@@ -87,8 +87,13 @@ fn public_lazy_constructors_compose_as_miter() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 
     let constant: lazy::Taken<lazy::Constant<u32>> = lazy::constant(3_u32).take(4);
-    assert_eq!(MIter::<WgpuRuntime>::len(&constant).unwrap(), 4);
-    assert_eq!(reduce(&exec, constant, 0, Sum).unwrap(), 12);
+    assert_eq!(
+        reduce(&exec, constant, 0, Sum)
+            .unwrap()
+            .read(&exec)
+            .unwrap(),
+        12
+    );
 
     let counting: lazy::Taken<lazy::Counting> = lazy::counting(1).take(4);
     let output = map(
@@ -101,8 +106,13 @@ fn public_lazy_constructors_compose_as_miter() {
 
     let values = exec.to_device(&[10_u32, 20, 30, 40]);
     let permuted = lazy::permute(values.slice(..), lazy::counting(0).take(4));
-    assert_eq!(MIter::<WgpuRuntime>::len(&permuted).unwrap(), 4);
-    assert_eq!(reduce(&exec, permuted, 0, Sum).unwrap(), 100);
+    assert_eq!(
+        reduce(&exec, permuted, 0, Sum)
+            .unwrap()
+            .read(&exec)
+            .unwrap(),
+        100
+    );
 }
 
 #[test]
@@ -122,7 +132,6 @@ fn with_table_shares_an_entire_lazy_iterator_with_every_context() {
     let table = lazy::map(values.slice(..), Double);
     let input = lazy::with_table(indices.slice(..), table);
 
-    assert_eq!(MIter::<WgpuRuntime>::len(&input).unwrap(), 4);
     let output = map(&exec, input, LookupTable).unwrap();
 
     assert_eq!(exec.to_host(&output).unwrap(), vec![40, 10, 30, 20]);
@@ -170,7 +179,6 @@ fn slicing_with_table_slices_only_the_contexts() {
         .slice(1..5)
         .slice(1..3);
 
-    assert_eq!(MIter::<WgpuRuntime>::len(&input).unwrap(), 2);
     let output = map(&exec, input, LookupTable).unwrap();
 
     assert_eq!(exec.to_host(&output).unwrap(), vec![30, 20]);
@@ -206,12 +214,12 @@ fn with_table_matches_permuted_single_segment_iterators() {
     let second = exec.to_device(&[10_u32, 20, 30]);
 
     let first_table = lazy::permute(
-        SegmentIterator::new(first.slice(..), lazy::stride(0, first.len()).take(2)),
-        lazy::constant(0).take(indices.len()),
+        SegmentIterator::new(first.slice(..), lazy::stride(0, 3).take(2)),
+        lazy::constant(0).take(3),
     );
     let second_table = lazy::permute(
-        SegmentIterator::new(second.slice(..), lazy::stride(0, second.len()).take(2)),
-        lazy::constant(0).take(indices.len()),
+        SegmentIterator::new(second.slice(..), lazy::stride(0, 3).take(2)),
+        lazy::constant(0).take(3),
     );
     let composed = massively::zip3(indices.slice(..), first_table, second_table);
     let nested = lazy::with_table(
@@ -234,7 +242,6 @@ fn taken_tracks_nested_slice_offsets() {
     let taken: lazy::Taken<lazy::Counting> = lazy::counting(10).take(8);
     let sliced = taken.slice(2..6).slice(1..3);
 
-    assert_eq!(MIter::<WgpuRuntime>::len(&sliced).unwrap(), 2);
     let values = exec.to_device(&(0_u32..20).collect::<Vec<_>>());
     let output = gather(&exec, values.slice(..), sliced).unwrap();
 
@@ -250,7 +257,6 @@ fn slicing_a_lazy_permutation_slices_its_logical_rows() {
     let sliced = lazy::permute(values.slice(..), indices.slice(..))
         .slice(1..5)
         .slice(1..3);
-    assert_eq!(MIter::<WgpuRuntime>::len(&sliced).unwrap(), 2);
 
     let output = map(&exec, sliced, massively::op::Identity).unwrap();
     assert_eq!(exec.to_host(&output).unwrap(), vec![60, 10]);
@@ -295,9 +301,8 @@ fn reverse_composes_with_slicing_and_multi_column_inputs() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let empty = exec.alloc::<u32>(0);
     let reversed_empty = lazy::reverse(empty.slice(..));
-    assert_eq!(MIter::<WgpuRuntime>::len(&reversed_empty).unwrap(), 0);
     let empty_output = map(&exec, reversed_empty, massively::op::Identity).unwrap();
-    assert_eq!(empty_output.len(), 0);
+    assert!(exec.to_host(&empty_output).unwrap().is_empty());
 
     let values = exec.to_device(&[10_u32, 20, 30, 40, 50]);
     let middle = lazy::reverse(values.slice(..)).slice(1..4).slice(1..2);
@@ -309,7 +314,6 @@ fn reverse_composes_with_slicing_and_multi_column_inputs() {
     let second = exec.to_device(&[10_u32, 20, 30]);
     let reversed = lazy::reverse(zip2(first.slice(..), second.slice(..)));
 
-    assert_eq!(MIter::<WgpuRuntime>::len(&reversed).unwrap(), 3);
     let output = map(&exec, reversed, massively::op::Identity).unwrap();
     let (output_first, output_second) = MStorage::into_columns(output);
     assert_eq!(exec.to_host(&output_first).unwrap(), vec![3, 2, 1]);
@@ -325,7 +329,6 @@ fn repeat_each_is_lazy_sliceable_and_supports_multi_column_rows() {
         .slice(2..8)
         .slice(1..5);
 
-    assert_eq!(MIter::<WgpuRuntime>::len(&repeated).unwrap(), 4);
     let output = map(&exec, repeated, massively::op::Identity).unwrap();
     let (first, second) = MStorage::into_columns(output);
 
@@ -342,7 +345,6 @@ fn tile_is_lazy_sliceable_and_supports_multi_column_rows() {
         .slice(2..8)
         .slice(1..5);
 
-    assert_eq!(MIter::<WgpuRuntime>::len(&tiled).unwrap(), 4);
     let output = map(&exec, tiled, massively::op::Identity).unwrap();
     let (first, second) = MStorage::into_columns(output);
 
@@ -361,36 +363,28 @@ fn repeat_each_and_tile_handle_empty_and_zero_repetitions() {
     let repeated_zero = lazy::repeat_each(values.slice(..), 0);
     let tiled_zero = lazy::tile(values.slice(..), 0);
 
-    assert_eq!(MIter::<WgpuRuntime>::len(&repeated_empty).unwrap(), 0);
-    assert_eq!(MIter::<WgpuRuntime>::len(&tiled_empty).unwrap(), 0);
-    assert_eq!(MIter::<WgpuRuntime>::len(&repeated_zero).unwrap(), 0);
-    assert_eq!(MIter::<WgpuRuntime>::len(&tiled_zero).unwrap(), 0);
-
-    assert_eq!(
-        map(&exec, repeated_empty, massively::op::Identity)
-            .unwrap()
-            .len(),
-        0
-    );
-    assert_eq!(
-        map(&exec, tiled_zero, massively::op::Identity)
-            .unwrap()
-            .len(),
-        0
-    );
+    let repeated_empty = map(&exec, repeated_empty, massively::op::Identity).unwrap();
+    let tiled_empty = map(&exec, tiled_empty, massively::op::Identity).unwrap();
+    let repeated_zero = map(&exec, repeated_zero, massively::op::Identity).unwrap();
+    let tiled_zero = map(&exec, tiled_zero, massively::op::Identity).unwrap();
+    assert!(exec.to_host(&repeated_empty).unwrap().is_empty());
+    assert!(exec.to_host(&tiled_empty).unwrap().is_empty());
+    assert!(exec.to_host(&repeated_zero).unwrap().is_empty());
+    assert!(exec.to_host(&tiled_zero).unwrap().is_empty());
 }
 
 #[test]
 fn repeated_lazy_views_reject_lengths_larger_than_mindex() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let repeated = lazy::repeat_each(lazy::counting(0).take(u32::MAX), 2);
     let tiled = lazy::tile(lazy::counting(0).take(u32::MAX), 2);
 
     assert!(matches!(
-        MIter::<WgpuRuntime>::len(&repeated),
+        map(&exec, repeated, massively::op::Identity),
         Err(massively::Error::LengthTooLarge { .. })
     ));
     assert!(matches!(
-        MIter::<WgpuRuntime>::len(&tiled),
+        map(&exec, tiled, massively::op::Identity),
         Err(massively::Error::LengthTooLarge { .. })
     ));
 }
@@ -431,6 +425,6 @@ fn lazy_adjacent_difference_handles_empty_and_singleton_inputs() {
     )
     .unwrap();
 
-    assert_eq!(empty_output.len(), 0);
+    assert!(exec.to_host(&empty_output).unwrap().is_empty());
     assert_eq!(exec.to_host(&singleton_output).unwrap(), vec![7]);
 }

@@ -52,7 +52,6 @@ fn flat_map_handles_empty_input() {
 
     let output = flat_map(&exec, input.slice(..), RepeatValue).unwrap();
 
-    assert_eq!(output.len(), 0);
     assert_eq!(exec.to_host(&output).unwrap(), Vec::<u32>::new());
 }
 
@@ -63,7 +62,6 @@ fn flat_map_handles_nonempty_input_with_no_outputs() {
 
     let output = flat_map(&exec, input.slice(..), RepeatValue).unwrap();
 
-    assert_eq!(output.len(), 0);
     assert_eq!(exec.to_host(&output).unwrap(), Vec::<u32>::new());
 }
 

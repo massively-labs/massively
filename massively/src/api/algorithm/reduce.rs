@@ -2,7 +2,7 @@
 
 use cubecl::prelude::Runtime;
 
-use crate::{Error, Executor, MAlloc, MIter, MVal, op::ReductionOp};
+use crate::{Error, Executor, MAlloc, MIter, MVal, Scalar, op::ReductionOp};
 
 /// Reduces all input items, starting from `init`.
 ///
@@ -11,7 +11,7 @@ use crate::{Error, Executor, MAlloc, MIter, MVal, op::ReductionOp};
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, op, vector::reduce};
+/// use massively::{Executor, MVal, op, vector::reduce};
 ///
 /// struct Add;
 ///
@@ -27,21 +27,36 @@ use crate::{Error, Executor, MAlloc, MIter, MVal, op::ReductionOp};
 ///
 /// let sum = reduce(&exec, input.slice(..), 0_u32, Add).unwrap();
 ///
-/// assert_eq!(sum, 10);
+/// assert_eq!(sum.read(&exec).unwrap(), 10);
 /// ```
 pub fn reduce<R, Input, Op>(
     exec: &Executor<R>,
     input: Input,
-    init: Input::Item,
+    init: impl MVal<R, Input::Item>,
     op: Op,
-) -> Result<Input::Item, Error>
+) -> Result<impl MVal<R, Input::Item> + Clone, Error>
 where
     R: Runtime,
     Input: MIter<R>,
     Input::Item: MAlloc<R>,
     Op: ReductionOp<Input::Item>,
 {
-    let init = exec.value(init)?;
+    let init = crate::api::value::materialize_value(exec, &init)?;
+    reduce_value(exec, input, init, op)
+}
+
+fn reduce_value<R, Input, Op>(
+    exec: &Executor<R>,
+    input: Input,
+    init: Scalar<R, Input::Item>,
+    op: Op,
+) -> Result<Scalar<R, Input::Item>, Error>
+where
+    R: Runtime,
+    Input: MIter<R>,
+    Input::Item: MAlloc<R>,
+    Op: ReductionOp<Input::Item>,
+{
     let storage =
         <<Input::Item as MAlloc<R>>::Dispatch as crate::api::iter::ItemDispatch<R>>::reduce(
             exec,
@@ -49,5 +64,5 @@ where
             init.into_storage(),
             op,
         )?;
-    MVal::from_storage(storage)?.read(exec)
+    Scalar::from_storage(storage)
 }

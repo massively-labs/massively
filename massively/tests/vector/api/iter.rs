@@ -1,19 +1,9 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MAlloc, MFlag, MIter, MIterMut, MStorage, MVec, lazy, op::Identity, op::UnaryOp,
-    vector::gather, vector::map, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10, zip11,
-    zip12,
+    Executor, MFlag, MIter, MIterMut, MStorage, lazy, op::Identity, op::UnaryOp, vector::gather,
+    vector::map, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10, zip11, zip12,
 };
-
-fn allocate_for_output<R, Output>(exec: &Executor<R>, output: &Output) -> MVec<R, Output::Item>
-where
-    R: Runtime,
-    Output: MIterMut<R>,
-    Output::Item: MAlloc<R>,
-{
-    exec.alloc::<Output::Item>(MIterMut::len(output).unwrap())
-}
 
 fn transform_where_into<R, Input, Stencil, Output, Op>(
     exec: &Executor<R>,
@@ -37,17 +27,6 @@ struct IdentityTriple;
 struct SumFour;
 struct AddPair;
 struct EncodeFlagIndex;
-
-#[test]
-fn custom_functions_can_request_owned_allocation() {
-    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-    let first = exec.to_device(&[0_u32; 3]);
-    let second = exec.to_device(&[0_u32; 3]);
-    let output = zip2(first.slice_mut(..), second.slice_mut(..));
-
-    let owned = allocate_for_output(&exec, &output);
-    assert_eq!(MStorage::len(&owned).unwrap(), 3);
-}
 
 #[test]
 fn custom_preallocated_functions_do_not_need_allocation_bound() {
@@ -132,145 +111,25 @@ fn zip_helpers_expose_flat_public_iterators() {
         .map(|base| exec.to_device(&[base + 1, base + 2]))
         .collect();
 
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip2(columns[0].slice(..), columns[1].slice(..))).unwrap(),
-        2
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip3(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip4(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip5(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip6(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-            columns[5].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip7(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-            columns[5].slice(..),
-            columns[6].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip8(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-            columns[5].slice(..),
-            columns[6].slice(..),
-            columns[7].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip9(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-            columns[5].slice(..),
-            columns[6].slice(..),
-            columns[7].slice(..),
-            columns[8].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip10(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-            columns[5].slice(..),
-            columns[6].slice(..),
-            columns[7].slice(..),
-            columns[8].slice(..),
-            columns[9].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip11(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-            columns[5].slice(..),
-            columns[6].slice(..),
-            columns[7].slice(..),
-            columns[8].slice(..),
-            columns[9].slice(..),
-            columns[10].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
-    assert_eq!(
-        MIter::<WgpuRuntime>::len(&zip12(
-            columns[0].slice(..),
-            columns[1].slice(..),
-            columns[2].slice(..),
-            columns[3].slice(..),
-            columns[4].slice(..),
-            columns[5].slice(..),
-            columns[6].slice(..),
-            columns[7].slice(..),
-            columns[8].slice(..),
-            columns[9].slice(..),
-            columns[10].slice(..),
-            columns[11].slice(..),
-        ))
-        .unwrap(),
-        2,
-    );
+    fn assert_iter<R: Runtime, Input: MIter<R>>(_input: &Input) {}
+    macro_rules! assert_zip {
+        ($zip:ident; $($index:expr),+ $(,)?) => {{
+            let input = $zip($(columns[$index].slice(..)),+);
+            assert_iter::<WgpuRuntime, _>(&input);
+        }};
+    }
+
+    assert_zip!(zip2; 0, 1);
+    assert_zip!(zip3; 0, 1, 2);
+    assert_zip!(zip4; 0, 1, 2, 3);
+    assert_zip!(zip5; 0, 1, 2, 3, 4);
+    assert_zip!(zip6; 0, 1, 2, 3, 4, 5);
+    assert_zip!(zip7; 0, 1, 2, 3, 4, 5, 6);
+    assert_zip!(zip8; 0, 1, 2, 3, 4, 5, 6, 7);
+    assert_zip!(zip9; 0, 1, 2, 3, 4, 5, 6, 7, 8);
+    assert_zip!(zip10; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+    assert_zip!(zip11; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    assert_zip!(zip12; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
 
     let output = map(
         &exec,
@@ -325,8 +184,6 @@ fn read_slice_adapters_compose_on_binary_zip_trees() {
     let sliced = zip3(a.slice(..), b.slice(..), c.slice(..))
         .slice(1..4)
         .slice(1..2);
-    assert_eq!(MIter::<WgpuRuntime>::len(&sliced).unwrap(), 1);
-
     let output = map(&exec, sliced, AddThree).unwrap();
     assert_eq!(exec.to_host(&output).unwrap(), vec![333]);
 }

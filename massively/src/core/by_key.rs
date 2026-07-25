@@ -386,7 +386,7 @@ mod tests {
         assert_eq!((seventh[299], seventh[300], seventh[599]), (2100, 7, 2100));
 
         let init: Seven = (10, 20, 30, 40, 50, 60, 70);
-        let init = exec.value(init).unwrap();
+        let init = exec.scalar(init).unwrap();
         let exclusive = exec.alloc_row::<Seven>(len);
         crate::api::algorithm::exclusive_scan_by_key_into(
             &exec,

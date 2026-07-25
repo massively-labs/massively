@@ -8,7 +8,6 @@ pub enum Error {
     OutputTooShort { input: usize, output: usize },
     LengthTooLarge { len: usize },
     InvalidSegmentation,
-    UnresolvedLength,
     UnboundColumn,
     ForeignExecutor,
     Launch { message: String },
@@ -29,12 +28,6 @@ impl fmt::Display for Error {
             Self::LengthTooLarge { len } => write!(f, "length does not fit in u32: {len}"),
             Self::InvalidSegmentation => {
                 write!(f, "segmentation is not a valid ordered partition")
-            }
-            Self::UnresolvedLength => {
-                write!(
-                    f,
-                    "device-produced length was not resolved at the API boundary"
-                )
             }
             Self::UnboundColumn => write!(f, "column is not bound to device storage"),
             Self::ForeignExecutor => write!(f, "executor does not own this device data"),

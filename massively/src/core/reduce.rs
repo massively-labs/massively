@@ -42,7 +42,7 @@ const TILE_SIZE: usize = BLOCK_SIZE as usize * ITEMS_PER_UNIT;
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, op, vector::reduce};
+/// use massively::{Executor, MVal, op, vector::reduce};
 ///
 /// struct Add;
 ///
@@ -56,8 +56,9 @@ const TILE_SIZE: usize = BLOCK_SIZE as usize * ITEMS_PER_UNIT;
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let input = exec.to_device(&[1_u32, 2, 3]);
 ///
-/// let sum = reduce(&exec, input.slice(..), 0_u32, Add).unwrap();
-/// assert_eq!(sum, 6);
+/// let init = 0_u32;
+/// let sum = reduce(&exec, input.slice(..), init, Add).unwrap();
+/// assert_eq!(sum.read(&exec).unwrap(), 6);
 /// ```
 #[cubecl::cube]
 pub trait ReductionOp<Item: CubeType>: 'static + Send + Sync {
@@ -235,6 +236,41 @@ macro_rules! impl_leaf_staging {
                 bindings: &mut StagedBindings,
             ) -> Result<(), Error> {
                 let handle = client.create_from_slice(T::as_bytes(&[self.value]));
+                bindings.push(handle, 1, 0);
+                Ok(())
+            }
+        }
+
+        impl<R, T, $( $env_ty ),*> StageRead<R, $env> for crate::read::Value<T>
+        where
+            R: Runtime,
+            T: MStorageElement,
+            crate::read::Value<T>: BindSlots<$env>,
+        {
+            fn logical_len(&self) -> Result<usize, Error> {
+                Ok(1)
+            }
+
+            fn stage_at(
+                &self,
+                client: &ComputeClient<R>,
+                owner: u64,
+                bindings: &mut StagedBindings,
+            ) -> Result<(), Error> {
+                let handle = match self {
+                    crate::read::Value::Host(value) => {
+                        client.create_from_slice(T::as_bytes(&[*value]))
+                    }
+                    crate::read::Value::Device {
+                        handle,
+                        owner: value_owner,
+                    } => {
+                        if *value_owner != owner {
+                            return Err(Error::ForeignExecutor);
+                        }
+                        handle.clone()
+                    }
+                };
                 bindings.push(handle, 1, 0);
                 Ok(())
             }
@@ -1266,11 +1302,11 @@ mod tests {
         let output = reduce(
             &exec,
             input,
-            exec.value(init).unwrap().into_scratch_storage(),
+            exec.scalar(init).unwrap().into_scratch_storage(),
             AddSeven,
         )
         .unwrap();
-        let output = crate::MVal::<WgpuRuntime, Seven>::from_storage(output)
+        let output = crate::Scalar::<WgpuRuntime, Seven>::from_storage(output)
             .unwrap()
             .read(&exec)
             .unwrap();

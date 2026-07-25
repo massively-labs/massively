@@ -639,8 +639,11 @@ proptest! {
 
         let zero: Seven = (0, 0, 0, 0, 0, 0, 0);
         prop_assert_eq!(
-            massively::vector::reduce(&exec, input(), zero, MaxSeven)
-                .unwrap(),
+            read_value(
+                &exec,
+                massively::vector::reduce(&exec, input(), zero, MaxSeven)
+                    .unwrap(),
+            ),
             reference::reduce(&seven_aos(&columns), zero, MaxSeven),
         );
     }

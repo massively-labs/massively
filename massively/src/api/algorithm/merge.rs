@@ -119,8 +119,8 @@ where
     Item: MAlloc<R>,
     Less: BinaryPredicateOp<Item>,
 {
-    let left_len = left.len()?;
-    let right_len = right.len()?;
+    let left_len = left.capacity()?;
+    let right_len = right.capacity()?;
     let len = left_len
         .checked_add(right_len)
         .ok_or(Error::LengthTooLarge {
@@ -209,16 +209,16 @@ where
     LeftValues::Item: MAlloc<R>,
     Less: BinaryPredicateOp<LeftKeys::Item>,
 {
-    let left_len = left_keys.len()?;
-    let left_value_len = left_values.len()?;
+    let left_len = left_keys.capacity()?;
+    let left_value_len = left_values.capacity()?;
     if left_len != left_value_len {
         return Err(Error::LengthMismatch {
             left: left_len as usize,
             right: left_value_len as usize,
         });
     }
-    let right_len = right_keys.len()?;
-    let right_value_len = right_values.len()?;
+    let right_len = right_keys.capacity()?;
+    let right_value_len = right_values.capacity()?;
     if right_len != right_value_len {
         return Err(Error::LengthMismatch {
             left: right_len as usize,

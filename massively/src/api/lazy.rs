@@ -10,7 +10,9 @@ use std::ops::RangeBounds;
 
 use cubecl::prelude::Runtime;
 
-use crate::{Error, MIndex, MIter, MStorageElement, op::ReductionOp, op::UnaryOp};
+use crate::{
+    Error, MIndex, MIter, MStorageElement, api::iter::MIterExtent, op::ReductionOp, op::UnaryOp,
+};
 use crate::{core::facade as private, read::SliceExpression};
 
 pub use crate::core::read::Taken;
@@ -57,12 +59,12 @@ impl<Contexts, Table> WithTable<Contexts, Table> {
     {
         let context_len = self
             .contexts
-            .len()
-            .expect("with_table contexts must have a host-visible length");
+            .capacity()
+            .expect("with_table contexts must have a valid capacity");
         let table_len = self
             .table
-            .len()
-            .expect("with_table table must have a host-visible length");
+            .capacity()
+            .expect("with_table table must have a valid capacity");
         let table = crate::seg::SegmentIterator::new(self.table, stride(0, table_len).take(2));
         let repeated = permute(table, constant(0).take(context_len));
         crate::zip2(self.contexts, repeated)
@@ -88,16 +90,22 @@ where
         self.clone().compose::<R>().slice(range)
     }
 
+    fn lower_read(self) -> Self::Read {
+        self.compose::<R>().lower_read()
+    }
+}
+
+impl<R, Contexts, Table> MIterExtent<R> for WithTable<Contexts, Table>
+where
+    R: Runtime,
+    Contexts: MIter<R>,
+{
     fn capacity(&self) -> Result<MIndex, Error> {
         self.contexts.capacity()
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
         self.contexts.logical_extent()
-    }
-
-    fn lower_read(self) -> Self::Read {
-        self.compose::<R>().lower_read()
     }
 }
 
@@ -138,16 +146,22 @@ where
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
+    fn lower_read(self) -> Self::Read {
+        crate::read::Permute::new(self.values.lower_read(), self.indices.lower_read())
+    }
+}
+
+impl<R, Values, Indices> MIterExtent<R> for Permute<Values, Indices>
+where
+    R: Runtime,
+    Indices: MIter<R, Item = MIndex>,
+{
     fn capacity(&self) -> Result<MIndex, Error> {
         self.indices.capacity()
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
         self.indices.logical_extent()
-    }
-
-    fn lower_read(self) -> Self::Read {
-        crate::read::Permute::new(self.values.lower_read(), self.indices.lower_read())
     }
 }
 
@@ -186,16 +200,22 @@ where
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
+    fn lower_read(self) -> Self::Read {
+        crate::read::Reverse::new(self.values.lower_read())
+    }
+}
+
+impl<R, Values> MIterExtent<R> for Reverse<Values>
+where
+    R: Runtime,
+    Values: MIter<R>,
+{
     fn capacity(&self) -> Result<MIndex, Error> {
         self.values.capacity()
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
         self.values.logical_extent()
-    }
-
-    fn lower_read(self) -> Self::Read {
-        crate::read::Reverse::new(self.values.lower_read())
     }
 }
 
@@ -231,7 +251,7 @@ impl<Values> RepeatEach<Values> {
         R: Runtime,
         Values: MIter<R>,
     {
-        repeated_len(self.values.len()?, self.repeats)
+        repeated_len(self.values.capacity()?, self.repeats)
     }
 }
 
@@ -258,21 +278,11 @@ where
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
-    fn capacity(&self) -> Result<MIndex, Error> {
-        self.output_len::<R>()
-    }
-
-    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
-        Ok(crate::extent::LogicalExtent::fixed(
-            self.output_len::<R>()? as usize
-        ))
-    }
-
     fn lower_read(self) -> Self::Read {
         let input_len = self
             .values
-            .len()
-            .expect("lazy repeat_each input must have a host-visible length");
+            .capacity()
+            .expect("lazy repeat_each input must have a valid capacity");
         let output_len =
             repeated_len(input_len, self.repeats).expect("lazy repeat_each length overflow");
         let indices = crate::read::DivModCounting::new(
@@ -282,6 +292,22 @@ where
             output_len as usize,
         );
         crate::read::Permute::new(self.values.lower_read(), indices)
+    }
+}
+
+impl<R, Values> MIterExtent<R> for RepeatEach<Values>
+where
+    R: Runtime,
+    Values: MIter<R>,
+{
+    fn capacity(&self) -> Result<MIndex, Error> {
+        self.output_len::<R>()
+    }
+
+    fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
+        Ok(crate::extent::LogicalExtent::fixed(
+            self.output_len::<R>()? as usize
+        ))
     }
 }
 
@@ -317,7 +343,7 @@ impl<Values> Tile<Values> {
         R: Runtime,
         Values: MIter<R>,
     {
-        repeated_len(self.values.len()?, self.repeats)
+        repeated_len(self.values.capacity()?, self.repeats)
     }
 }
 
@@ -344,6 +370,22 @@ where
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
+    fn lower_read(self) -> Self::Read {
+        let input_len = self
+            .values
+            .capacity()
+            .expect("lazy tile input must have a valid capacity");
+        let output_len = repeated_len(input_len, self.repeats).expect("lazy tile length overflow");
+        let indices = crate::read::DivModCounting::new(0, 1, input_len.max(1), output_len as usize);
+        crate::read::Permute::new(self.values.lower_read(), indices)
+    }
+}
+
+impl<R, Values> MIterExtent<R> for Tile<Values>
+where
+    R: Runtime,
+    Values: MIter<R>,
+{
     fn capacity(&self) -> Result<MIndex, Error> {
         self.output_len::<R>()
     }
@@ -352,16 +394,6 @@ where
         Ok(crate::extent::LogicalExtent::fixed(
             self.output_len::<R>()? as usize
         ))
-    }
-
-    fn lower_read(self) -> Self::Read {
-        let input_len = self
-            .values
-            .len()
-            .expect("lazy tile input must have a host-visible length");
-        let output_len = repeated_len(input_len, self.repeats).expect("lazy tile length overflow");
-        let indices = crate::read::DivModCounting::new(0, 1, input_len.max(1), output_len as usize);
-        crate::read::Permute::new(self.values.lower_read(), indices)
     }
 }
 
@@ -433,23 +465,29 @@ where
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
+    fn lower_read(self) -> Self::Read {
+        let len = self
+            .input
+            .capacity()
+            .expect("lazy adjacent_difference input must have a valid capacity");
+        crate::read::Permute::new(
+            crate::read::Adjacent::from_input(self.input.lower_read()),
+            crate::read::Counting::new(0, len as usize),
+        )
+    }
+}
+
+impl<R, Input, Op> MIterExtent<R> for AdjacentDifference<Input, Op>
+where
+    R: Runtime,
+    Input: MIter<R>,
+{
     fn capacity(&self) -> Result<MIndex, Error> {
         self.input.capacity()
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
         self.input.logical_extent()
-    }
-
-    fn lower_read(self) -> Self::Read {
-        let len = self
-            .input
-            .len()
-            .expect("lazy adjacent_difference input must have a host-visible length");
-        crate::read::Permute::new(
-            crate::read::Adjacent::from_input(self.input.lower_read()),
-            crate::read::Counting::new(0, len as usize),
-        )
     }
 }
 
@@ -504,16 +542,22 @@ where
         crate::read::Slice::new(input.slice_expression(start, count))
     }
 
+    fn lower_read(self) -> Self::Read {
+        crate::read::Transform::from_input(self.input.lower_read())
+    }
+}
+
+impl<R, Input, Op> MIterExtent<R> for Map<Input, Op>
+where
+    R: Runtime,
+    Input: MIter<R>,
+{
     fn capacity(&self) -> Result<MIndex, Error> {
         self.input.capacity()
     }
 
     fn logical_extent(&self) -> Result<crate::extent::LogicalExtent, Error> {
         self.input.logical_extent()
-    }
-
-    fn lower_read(self) -> Self::Read {
-        crate::read::Transform::from_input(self.input.lower_read())
     }
 }
 

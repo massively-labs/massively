@@ -157,40 +157,58 @@ an `MVec`. Algorithms whose semantics require an existing destination, such as
 ```rust
 let output = map(&exec, input, op)?;
 let sum = reduce(&exec, input, zero, sum_op)?;
+let continued = reduce(&exec, more_input, &sum, sum_op)?;
+let host_sum = sum.read(&exec)?;
 ```
 
-Host/device movement is explicit. Algorithms take an `Executor`, so launches,
-transfers, and ownership checks remain visible at the call site.
+Vector host/device movement remains explicit. Single-value inputs implement `MVal`:
+an ordinary host value is staged only when a GPU consumer needs it, while a
+device-resident value is read back only when host control flow calls `read()`.
+Algorithms take an `Executor`, so those conversions, launches, and ownership
+checks happen at a visible execution boundary.
 
-### Scalar And Length Boundaries
+### Value And Length Boundaries
 
-The public API returns scalar results as ordinary host-visible values:
-`reduce` returns its item, truth-valued algorithms return `MFlag`, and indices
-and lengths use `MIndex`. Both aliases use `u32`. Algorithms with
-data-dependent output lengths, such as `copy_where` and `reduce_by_key`, return
-storage whose exact length is already available through `len()`.
+The `MVal<R, T>` trait is the common scalar-value contract. Ordinary `T` and
+GPU-produced values can be passed to the same input. A consumer calls
+`MVal::as_iter` when a kernel needs the value or `MVal::read` when allocation
+or host control flow needs it.
 
-These calls are synchronous at the return boundary when a GPU-produced scalar
-or exact output length must be observed. Length-preserving algorithms and
-algorithms writing into caller-provided fixed storage do not need that scalar
-readback. Internally, device scalars and logical extents are propagated between
-GPU stages without intermediate CPU transfers, so a public operation performs
-at most the synchronization required by its return contract. `Executor::to_host`
-remains the explicit boundary for copying result data.
+GPU-produced scalar results expose only `impl MVal<R, T>` and stay on the
+device until a host consumer calls `read()`.
+`Executor::value` explicitly uploads a host value when callers want to prepare
+or reuse a device-resident value.
+Truth-valued algorithms use `MFlag`, while indices and lengths use `MIndex`.
+Both aliases use `u32`.
+
+Owned device allocations are also bounded by `MIndex`: `Executor::alloc` and
+the storage allocation contract take `MIndex`, not `usize`. Consequently every
+allocated row has a representable index, and a full-length index or permutation
+vector can cover the same domain. A length originating as host `usize` must be
+checked and converted before allocation; the conversion to backend byte counts
+remains an internal implementation detail.
+
+Algorithms with data-dependent output lengths, such as `copy_where` and
+`reduce_by_key`, retain their physical allocation bound and device-resident
+logical extent internally. Neither is exposed as a public length or capacity
+query. The logical extent remains attached to each resulting device column and
+propagates through later algorithms without host synchronization.
+`Executor::to_host` remains the explicit boundary for copying vector data.
 
 `MFlag` is the truth representation throughout Massively: zero is false and
 nonzero is true. Predicate producers should use `flag::from_bool` to return a
 canonical flag, while stencils accept any `MFlag` value. Consumers should use
 `flag::is_set`; comparing an arbitrary flag to `1` is incorrect because other
-nonzero values are also true. Device-resident summaries are ordinary
-`MVec<R, MFlag>` values.
+nonzero values are also true. Device-resident summaries expose
+`impl MVal<R, MFlag>`.
 
 ### Device Storage And Slices
 
 `DeviceVec<R, T>` owns one contiguous device allocation. Algorithms read a
-`DeviceSlice<T>` returned by `DeviceVec::slice`, and write a `DeviceSliceMut<T>`
-returned by `DeviceVec::slice_mut`. Slices are zero-copy views and can be sliced
-again. Slice bounds use `MIndex`.
+`DeviceSlice<R, T>` returned by `DeviceVec::slice`, and write a
+`DeviceSliceMut<R, T>` returned by `DeviceVec::slice_mut`. Slices are zero-copy
+views, retain their runtime type, and can be sliced again. Slice bounds use
+`MIndex`.
 
 ### Multi-column Values
 

@@ -1,15 +1,15 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MIter, MStorage, lazy,
+    Executor, MIter, MStorage, MVal, lazy,
     op::BinaryPredicateOp,
     op::ExpandOp,
     op::PredicateOp,
     op::ReductionOp,
     op::UnaryOp,
     seg::{
-        AdjacentFind, AllOf, Executable, FindIf, FlatMap, ForEachSegment, Map, Reduce, Segment,
-        SegmentIterator, Segmentation, Take, Unique,
+        AdjacentFind, AllOf, ExclusiveScan, Executable, FindIf, FlatMap, ForEachSegment, Map,
+        Reduce, Segment, SegmentIterator, Segmentation, Take, Unique,
     },
     vector::{copy_where, equal, is_sorted, map as vector_map},
     zip2, zip3,
@@ -313,13 +313,38 @@ fn segmented_algorithms_return_owned_device_results() {
         vec![0, 2, 3]
     );
 
-    let reduced = ForEachSegment(Reduce(Add, 0))
+    let reduced = ForEachSegment(Reduce(Add, 0_u32))
         .run(
             &exec,
             SegmentIterator::new(values.slice(..), offsets.slice(..)),
         )
         .unwrap();
     assert_eq!(exec.to_host(&reduced).unwrap(), vec![4, 6]);
+}
+
+#[test]
+fn segmented_scalar_inputs_accept_device_results_without_reading() {
+    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    let empty = exec.alloc::<u32>(0);
+    let zero = massively::vector::reduce(&exec, empty.slice(..), 0_u32, Add).unwrap();
+    let values = exec.to_device(&[1_u32, 2, 4]);
+    let offsets = exec.to_device(&[0_u32, 2, 3]);
+
+    let scanned = ForEachSegment(ExclusiveScan(Add, zero.clone()))
+        .run(
+            &exec,
+            SegmentIterator::new(values.slice(..), offsets.slice(..)),
+        )
+        .unwrap();
+    assert_eq!(exec.to_host(scanned.values()).unwrap(), vec![0, 1, 0]);
+
+    let reduced = ForEachSegment(Reduce(Add, zero))
+        .run(
+            &exec,
+            SegmentIterator::new(values.slice(..), offsets.slice(..)),
+        )
+        .unwrap();
+    assert_eq!(exec.to_host(&reduced).unwrap(), vec![3, 4]);
 }
 
 #[test]
@@ -370,7 +395,8 @@ fn segmentation_representations_are_interchangeable() {
     );
 
     let ids = exec.to_device(&[0_u32, 1, 1, 2, 2, 2]);
-    let from_ids = Segmentation::from_segment_ids(&exec, ids.slice(..), 3).unwrap();
+    let segment_count = 3_u32;
+    let from_ids = Segmentation::from_segment_ids(&exec, ids.slice(..), segment_count).unwrap();
     assert_eq!(exec.to_host(&from_ids.offsets()).unwrap(), vec![0, 1, 3, 6]);
     assert_eq!(
         exec.to_host(&from_ids.lengths(&exec).unwrap()).unwrap(),
@@ -492,10 +518,10 @@ fn segmentation_rejects_invalid_representations_and_overflow() {
     let no_values = exec.to_device(&[] as &[u32]);
     let no_offsets = exec.to_device(&[] as &[u32]);
     let raw = SegmentIterator::new(no_values.slice(..), no_offsets.slice(..));
-    assert_eq!(
-        <_ as MIter<WgpuRuntime>>::len(&raw),
+    assert!(matches!(
+        vector_map(&exec, raw, SliceLength),
         Err(massively::Error::InvalidSegmentation)
-    );
+    ));
 
     for ids in [&[0_u32, 2, 1][..], &[0_u32, 3][..]] {
         let ids = exec.to_device(ids);
@@ -764,7 +790,7 @@ fn segmented_take_find_if_and_adjacent_find_cover_empty_segments() {
             SegmentIterator::new(values.slice(..), offsets.slice(..)),
         )
         .unwrap();
-    assert_eq!(taken_zero.values().len(), 0);
+    assert!(exec.to_host(taken_zero.values()).unwrap().is_empty());
     assert_eq!(
         exec.to_host(&taken_zero.offsets().offsets()).unwrap(),
         vec![0, 0, 0, 0, 0, 0]
@@ -804,11 +830,13 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
 
     fn assert_item<R: Runtime, Input: MIter<R, Item = Segment<u32>>>(_input: &Input) {}
     assert_item::<WgpuRuntime, _>(&rows);
-    assert_eq!(<_ as MIter<WgpuRuntime>>::len(&rows).unwrap(), 5);
     let lengths = vector_map(&exec, rows.clone(), SliceLength).unwrap();
     assert_eq!(exec.to_host(&lengths).unwrap(), vec![0, 1, 2, 2, 1]);
     assert_eq!(
-        is_sorted(&exec, rows.clone(), LexicographicalBytes).unwrap(),
+        is_sorted(&exec, rows.clone(), LexicographicalBytes)
+            .unwrap()
+            .read(&exec)
+            .unwrap(),
         massively::flag::from_bool(true)
     );
 
@@ -819,14 +847,19 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
     fn assert_lazy_item<R: Runtime, Input: MIter<R, Item = Segment<Code>>>(_input: &Input) {}
     assert_lazy_item::<WgpuRuntime, _>(&lazy_rows);
     assert_eq!(
-        is_sorted(&exec, lazy_rows, LexicographicalCodes).unwrap(),
+        is_sorted(&exec, lazy_rows, LexicographicalCodes)
+            .unwrap()
+            .read(&exec)
+            .unwrap(),
         massively::flag::from_bool(true)
     );
 
     let middle = rows.slice(1..4);
-    assert_eq!(<_ as MIter<WgpuRuntime>>::len(&middle).unwrap(), 3);
     assert_eq!(
-        is_sorted(&exec, middle, LexicographicalBytes).unwrap(),
+        is_sorted(&exec, middle, LexicographicalBytes)
+            .unwrap()
+            .read(&exec)
+            .unwrap(),
         massively::flag::from_bool(true)
     );
 
@@ -835,7 +868,10 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
     let unsorted_offsets = exec.to_device(&[0_u32, 2, 4]);
     let unsorted = SegmentIterator::new(unsorted_values.slice(..), unsorted_offsets.slice(..));
     assert_eq!(
-        is_sorted(&exec, unsorted, LexicographicalBytes).unwrap(),
+        is_sorted(&exec, unsorted, LexicographicalBytes)
+            .unwrap()
+            .read(&exec)
+            .unwrap(),
         massively::flag::from_bool(false)
     );
 
@@ -850,7 +886,10 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
         right_offsets.slice(..),
     );
     assert_eq!(
-        equal(&exec, left, right, SlicesEqual).unwrap(),
+        equal(&exec, left, right, SlicesEqual)
+            .unwrap()
+            .read(&exec)
+            .unwrap(),
         massively::flag::from_bool(true)
     );
 }

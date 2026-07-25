@@ -3,8 +3,8 @@
 use cubecl::prelude::*;
 
 use crate::{
-    A1, Column, Constant, DeviceSliceMut, DeviceVec, Dispatch, Error, Executor, MFlag,
-    ReadExpression, RowStorage, S1, StorageLayout, Transform, Zip,
+    A1, Column, ColumnMut, Constant, DeviceVec, Dispatch, Error, Executor, MFlag, ReadExpression,
+    RowStorage, S1, StorageLayout, Transform, Zip,
     indexed::GatherInput,
     op::UnaryOp,
     output::{LowerOutputExpression, OutputExpression, SliceOutput, StageOutput},
@@ -90,14 +90,14 @@ pub trait FillOutput<R: Runtime>: OutputExpression + Sized {
     fn fill_output(self, exec: &Executor<R>, value: Self::Item) -> Result<(), Error>;
 }
 
-impl<R, T> FillOutput<R> for DeviceSliceMut<T>
+impl<R, T> FillOutput<R> for ColumnMut<T>
 where
     R: Runtime,
     T: crate::MStorageElement + StorageLayout<StorageArity = S1>,
     Constant<T>: ReadExpression<Item = T, ReadArity = A1>
         + LowerReadExpression<Slots = Env1<T>>
         + StageRead<R, Env0>,
-    DeviceSliceMut<T>: OutputExpression<Item = T, StorageArity = S1>
+    ColumnMut<T>: OutputExpression<Item = T, StorageArity = S1>
         + LowerOutputExpression<Slots = Env1<T>>
         + StageOutput<R, Env0>,
 {
@@ -166,7 +166,7 @@ where
     Dispatch<crate::A13, crate::S12>: InclusiveScanDispatch<
             R,
             Transform<Stencil, IsTrue>,
-            DeviceSliceMut<u32>,
+            ColumnMut<u32>,
             u32,
             crate::read::KernelReadSlots<
                 <Transform<Stencil, IsTrue> as LowerReadExpression>::Slots,
@@ -177,7 +177,7 @@ where
     Dispatch<crate::A13, crate::S12>: InclusiveScanDispatch<
             R,
             Transform<Stencil, IsFalse>,
-            DeviceSliceMut<u32>,
+            ColumnMut<u32>,
             u32,
             crate::read::KernelReadSlots<
                 <Transform<Stencil, IsFalse> as LowerReadExpression>::Slots,
@@ -185,7 +185,7 @@ where
             crate::output::KernelOutputSlots<Env1<u32>>,
             SumU32,
         >,
-    DeviceSliceMut<u32>: StageOutput<R, Env0>,
+    ColumnMut<u32>: StageOutput<R, Env0>,
 {
     fn flag_len(&self) -> Result<usize, Error> {
         self.logical_len()
@@ -203,7 +203,7 @@ where
             exec,
             Transform::new(self, IsTrue),
             SumU32,
-            positions.slice_mut(..),
+            positions.slice_mut_usize(..),
         )?;
         positions.set_logical_extent(extent);
         SelectionControl::from_positions(exec, positions)
@@ -217,7 +217,7 @@ where
             exec,
             Transform::new(self, IsFalse),
             SumU32,
-            positions.slice_mut(..),
+            positions.slice_mut_usize(..),
         )?;
         positions.set_logical_extent(extent);
         SelectionControl::from_positions(exec, positions)
@@ -472,12 +472,19 @@ where
 /// Replaces items whose logical stencil is true.
 pub(crate) fn replace_where<R, Stencil, Output>(
     exec: &Executor<R>,
-    value: Output::Item,
+    value: <Output::Item as crate::allocation::ScratchStorage<R>>::Storage,
     stencil: Stencil,
     output: Output,
 ) -> Result<(), Error>
 where
     R: Runtime,
+    crate::read::FixedRead<
+        <<Output::Item as crate::allocation::ScratchStorage<R>>::Storage as RowStorage<R>>::Read,
+    >: GatherInput<
+            R,
+            Constant<u32>,
+            <<Output::Item as crate::allocation::ScratchStorage<R>>::Storage as RowStorage<R>>::Write,
+        >,
     Stencil: FlagInput<R>,
     Output: OutputExpression,
     Output::Item: crate::allocation::ScratchStorage<R>,
@@ -498,7 +505,11 @@ where
     let control = stencil.selected_control(exec)?;
     let replacements =
         <Output::Item as crate::allocation::ScratchStorage<R>>::alloc_scratch(exec, control.len());
-    replacements.write().fill_output(exec, value)?;
+    crate::read::FixedRead::new(value.read()).gather(
+        exec,
+        Constant::new(0, control.len()),
+        replacements.write(),
+    )?;
     crate::indexed::IndexedCopyInput::indexed_copy_selected(
         replacements.read(),
         exec,
@@ -709,7 +720,7 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[3_u32, 2, 4, 1, 6, 5]);
         let output = exec.to_device(&[0_u32; 6]);
-        let split = partition(&exec, input.column(), IsEven, output.slice_mut(..)).unwrap();
+        let split = partition(&exec, input.column(), IsEven, output.slice_mut_usize(..)).unwrap();
         let split = exec.to_host(&split).unwrap()[0];
         assert_eq!(split, 3);
         assert_eq!(exec.to_host(&output).unwrap(), vec![2, 4, 6, 3, 1, 5]);
@@ -721,10 +732,22 @@ mod tests {
         let a = exec.to_device(&[0_u32; 4]);
         let b = exec.to_device(&[0_f32; 4]);
         let c = exec.to_device(&[0_i32; 4]);
-        let output = || Zip::new(Zip::new(a.slice_mut(..), b.slice_mut(..)), c.slice_mut(..));
+        let output = || {
+            Zip::new(
+                Zip::new(a.slice_mut_usize(..), b.slice_mut_usize(..)),
+                c.slice_mut_usize(..),
+            )
+        };
         fill(&exec, (7_u32, 2.5_f32, -3_i32), output()).unwrap();
         let flags = exec.to_device(&[0_u32, 1, 0, 1]);
-        replace_where(&exec, (9_u32, 4.5_f32, -8_i32), flags.column(), output()).unwrap();
+        let value = exec.scalar((9_u32, 4.5_f32, -8_i32)).unwrap();
+        replace_where(
+            &exec,
+            value.into_scratch_storage(),
+            flags.column(),
+            output(),
+        )
+        .unwrap();
         assert_eq!(exec.to_host(&a).unwrap(), vec![7, 9, 7, 9]);
         assert_eq!(exec.to_host(&b).unwrap(), vec![2.5, 4.5, 2.5, 4.5]);
         assert_eq!(exec.to_host(&c).unwrap(), vec![-3, -8, -3, -8]);

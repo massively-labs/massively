@@ -16,7 +16,10 @@ fn scale_prime_block_dispatch_guard() {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::reduce(&exec, lazify(gpu.slice(..)), 0, MaxU32,).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::reduce(&exec, lazify(gpu.slice(..)), 0, MaxU32,).unwrap(),
+        ),
         (LEN - 1) as u32
     );
     assert_eq!(
@@ -78,7 +81,10 @@ scale_test!(scale_reduce, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::reduce(&exec, lazify(gpu.slice(..)), 0, MaxU32,).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::reduce(&exec, lazify(gpu.slice(..)), 0, MaxU32,).unwrap(),
+        ),
         reference::reduce(&input, 0, MaxU32)
     );
 });
@@ -124,17 +130,14 @@ scale_test!(scale_copy_where, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     let flags_gpu = exec.to_device(&flags);
-    let output = exact(
+    let output = massively::vector::copy_where(
         &exec,
-        massively::vector::copy_where(
-            &exec,
-            lazify(gpu.slice(..)),
-            as_stencil(lazify(flags_gpu.slice(..))),
-        )
-        .unwrap(),
-    );
+        lazify(gpu.slice(..)),
+        as_stencil(lazify(flags_gpu.slice(..))),
+    )
+    .unwrap();
     let expected = reference::copy_where(&input, &flags);
-    assert_eq!(output.len() as usize, expected.len());
+    assert_eq!(logical_len(&exec, &output), expected.len());
     assert_eq!(exec.to_host(&output).unwrap(), expected);
 });
 
@@ -144,17 +147,14 @@ scale_test!(scale_remove_where, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     let flags_gpu = exec.to_device(&flags);
-    let output = exact(
+    let output = massively::vector::remove_where(
         &exec,
-        massively::vector::remove_where(
-            &exec,
-            lazify(gpu.slice(..)),
-            as_stencil(lazify(flags_gpu.slice(..))),
-        )
-        .unwrap(),
-    );
+        lazify(gpu.slice(..)),
+        as_stencil(lazify(flags_gpu.slice(..))),
+    )
+    .unwrap();
     let expected = reference::remove_where(&input, &flags);
-    assert_eq!(output.len() as usize, expected.len());
+    assert_eq!(logical_len(&exec, &output), expected.len());
     assert_eq!(exec.to_host(&output).unwrap(), expected);
 });
 
@@ -164,7 +164,7 @@ scale_test!(scale_partition, {
     let gpu = exec.to_device(&input);
     let (output, boundary) =
         massively::vector::partition(&exec, lazify(gpu.slice(..)), NonZero).unwrap();
-    let boundary = boundary as usize;
+    let boundary = read_value(&exec, boundary) as usize;
     let (mut selected, rejected) = reference::partition(&input, NonZero);
     assert_eq!(boundary, selected.len());
     selected.extend(rejected);
@@ -176,7 +176,10 @@ scale_test!(scale_count_if, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::count_if(&exec, lazify(gpu.slice(..)), NonZero).unwrap() as usize,
+        read_value(
+            &exec,
+            massively::vector::count_if(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ) as usize,
         reference::count_if(&input, NonZero)
     );
 });
@@ -185,7 +188,10 @@ scale_test!(scale_all_of, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::all_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::all_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::all_of(&input, NonZero))
     );
 });
@@ -194,7 +200,10 @@ scale_test!(scale_any_of, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::any_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::any_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::any_of(&input, NonZero))
     );
 });
@@ -203,7 +212,10 @@ scale_test!(scale_none_of, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::none_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::none_of(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::none_of(&input, NonZero))
     );
 });
@@ -224,7 +236,10 @@ scale_test!(scale_is_partitioned, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::is_partitioned(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::is_partitioned(&exec, lazify(gpu.slice(..)), NonZero).unwrap(),
+        ),
         expected_flag(reference::is_partitioned(&input, NonZero))
     );
 });
@@ -311,13 +326,16 @@ scale_test!(scale_equal, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::equal(
+        read_value(
             &exec,
-            lazify(gpu.slice(..)),
-            lazify(gpu.slice(..)),
-            EqualU32
-        )
-        .unwrap(),
+            massively::vector::equal(
+                &exec,
+                lazify(gpu.slice(..)),
+                lazify(gpu.slice(..)),
+                EqualU32
+            )
+            .unwrap(),
+        ),
         expected_flag(reference::equal(&input, &input, EqualU32))
     );
 });
@@ -440,7 +458,10 @@ scale_test!(scale_is_sorted, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::is_sorted(&exec, lazify(gpu.slice(..)), LessU32).unwrap(),
+        read_value(
+            &exec,
+            massively::vector::is_sorted(&exec, lazify(gpu.slice(..)), LessU32).unwrap(),
+        ),
         expected_flag(reference::is_sorted(&input, LessU32))
     );
 });
@@ -449,7 +470,10 @@ scale_test!(scale_is_sorted_until, {
     let exec = exec();
     let gpu = exec.to_device(&input);
     assert_eq!(
-        massively::vector::is_sorted_until(&exec, lazify(gpu.slice(..)), LessU32).unwrap() as usize,
+        read_value(
+            &exec,
+            massively::vector::is_sorted_until(&exec, lazify(gpu.slice(..)), LessU32).unwrap(),
+        ) as usize,
         reference::is_sorted_until(&input, LessU32)
     );
 });
@@ -460,13 +484,16 @@ scale_test!(scale_lexicographical_compare, {
     let left_gpu = exec.to_device(&left);
     let right_gpu = exec.to_device(&right);
     assert_eq!(
-        massively::vector::lexicographical_compare(
+        read_value(
             &exec,
-            lazify(left_gpu.slice(..)),
-            lazify(right_gpu.slice(..)),
-            LessU32
-        )
-        .unwrap(),
+            massively::vector::lexicographical_compare(
+                &exec,
+                lazify(left_gpu.slice(..)),
+                lazify(right_gpu.slice(..)),
+                LessU32
+            )
+            .unwrap(),
+        ),
         expected_flag(reference::lexicographical_compare(&left, &right, LessU32))
     );
 });
@@ -546,12 +573,9 @@ scale_test!(scale_unique, {
     let input = reference::sort(&scale_input(), LessU32);
     let exec = exec();
     let gpu = exec.to_device(&input);
-    let output = exact(
-        &exec,
-        massively::vector::unique(&exec, lazify(gpu.slice(..)), EqualU32).unwrap(),
-    );
+    let output = massively::vector::unique(&exec, lazify(gpu.slice(..)), EqualU32).unwrap();
     let expected = reference::unique(&input, EqualU32);
-    assert_eq!(output.len() as usize, expected.len());
+    assert_eq!(logical_len(&exec, &output), expected.len());
     assert_eq!(exec.to_host(&output).unwrap(), expected);
 });
 
@@ -563,18 +587,15 @@ macro_rules! scale_set_test {
             let exec = exec();
             let left_gpu = exec.to_device(&left);
             let right_gpu = exec.to_device(&right);
-            let output = exact(
+            let output = massively::vector::$algorithm(
                 &exec,
-                massively::vector::$algorithm(
-                    &exec,
-                    lazify(left_gpu.slice(..)),
-                    lazify(right_gpu.slice(..)),
-                    LessU32,
-                )
-                .unwrap(),
-            );
+                lazify(left_gpu.slice(..)),
+                lazify(right_gpu.slice(..)),
+                LessU32,
+            )
+            .unwrap();
             let expected = reference::$oracle(&left, &right, LessU32);
-            assert_eq!(output.len() as usize, expected.len());
+            assert_eq!(logical_len(&exec, &output), expected.len());
             assert_eq!(exec.to_host(&output).unwrap(), expected);
         });
     };
@@ -644,21 +665,18 @@ scale_test!(scale_reduce_by_key, {
     let exec = exec();
     let keys_gpu = exec.to_device(&keys);
     let values_gpu = exec.to_device(&values);
-    let (out_keys, out_values) = exact_pair(
+    let (out_keys, out_values) = massively::vector::reduce_by_key(
         &exec,
-        massively::vector::reduce_by_key(
-            &exec,
-            lazify(keys_gpu.slice(..)),
-            lazify(values_gpu.slice(..)),
-            EqualU32,
-            0,
-            MaxU32,
-        )
-        .unwrap(),
-    );
+        lazify(keys_gpu.slice(..)),
+        lazify(values_gpu.slice(..)),
+        EqualU32,
+        0,
+        MaxU32,
+    )
+    .unwrap();
     let (expected_keys, expected_values) =
         reference::reduce_by_key(&keys, &values, EqualU32, 0, MaxU32);
-    assert_eq!(out_keys.len() as usize, expected_keys.len());
+    assert_eq!(logical_len(&exec, &out_keys), expected_keys.len());
     assert_eq!(exec.to_host(&out_keys).unwrap(), expected_keys);
     assert_eq!(exec.to_host(&out_values).unwrap(), expected_values);
 });
@@ -668,18 +686,15 @@ scale_test!(scale_unique_by_key, {
     let exec = exec();
     let keys_gpu = exec.to_device(&keys);
     let values_gpu = exec.to_device(&values);
-    let output = exact(
+    let output = massively::vector::unique_by_key(
         &exec,
-        massively::vector::unique_by_key(
-            &exec,
-            lazify(keys_gpu.slice(..)),
-            lazify(values_gpu.slice(..)),
-            EqualU32,
-        )
-        .unwrap(),
-    );
+        lazify(keys_gpu.slice(..)),
+        lazify(values_gpu.slice(..)),
+        EqualU32,
+    )
+    .unwrap();
     let (_, expected_values) = reference::unique_by_key(&keys, &values, EqualU32);
-    assert_eq!(output.len() as usize, expected_values.len());
+    assert_eq!(logical_len(&exec, &output), expected_values.len());
     assert_eq!(exec.to_host(&output).unwrap(), expected_values);
 });
 scale_test!(scale_merge_by_key, {

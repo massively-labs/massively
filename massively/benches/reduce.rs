@@ -2,7 +2,9 @@ mod common;
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use cubecl::prelude::*;
-use massively::{op::BinaryPredicateOp, op::ReductionOp, vector::reduce, vector::reduce_by_key};
+use massively::{
+    MVal, op::BinaryPredicateOp, op::ReductionOp, vector::reduce, vector::reduce_by_key,
+};
 
 struct Sum;
 struct Equal;
@@ -28,7 +30,14 @@ fn bench_reduce(c: &mut Criterion) {
         let init = 0.0_f32;
         exec.sync().unwrap();
         group.bench_function(BenchmarkId::new("reduce", len), |b| {
-            b.iter(|| black_box(reduce(&exec, values.slice(..), init.clone(), Sum).unwrap()))
+            b.iter(|| {
+                black_box(
+                    reduce(&exec, values.slice(..), init.clone(), Sum)
+                        .unwrap()
+                        .read(&exec)
+                        .unwrap(),
+                )
+            })
         });
         group.bench_function(BenchmarkId::new("reduce_by_key", len), |b| {
             b.iter(|| {

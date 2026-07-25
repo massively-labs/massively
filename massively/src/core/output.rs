@@ -6,8 +6,8 @@ use std::ops::RangeBounds;
 
 use crate::storage::{Concat, FlatLeaves, FlatRow, JoinedRow};
 use crate::{
-    Column, DeviceSliceMut, Error, MStorageElement, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11,
-    S12, StorageLayout, Zip,
+    Column, ColumnMut, DeviceSliceMut, Error, MStorageElement, S1, S2, S3, S4, S5, S6, S7, S8, S9,
+    S10, S11, S12, StorageLayout, Zip,
     read::{Env0, Env1, Env2, Env3, Env4, Env5, Env6, Env7, Env8, Env9, Env10, Env11, Env12},
     storage::StorageArity,
 };
@@ -85,7 +85,7 @@ pub trait ReadOutput: OutputExpression {
     fn slice_read<Range: RangeBounds<usize>>(&self, range: Range) -> Self::Read;
 }
 
-impl<T> SliceOutput for DeviceSliceMut<T>
+impl<T> SliceOutput for ColumnMut<T>
 where
     T: MStorageElement + StorageLayout<StorageArity = S1>,
 {
@@ -94,7 +94,7 @@ where
     }
 }
 
-impl<T> OutputExpression for DeviceSliceMut<T>
+impl<T> OutputExpression for ColumnMut<T>
 where
     T: MStorageElement + StorageLayout<StorageArity = S1>,
 {
@@ -106,7 +106,7 @@ where
     }
 }
 
-impl<T> ReadOutput for DeviceSliceMut<T>
+impl<T> ReadOutput for ColumnMut<T>
 where
     T: MStorageElement + StorageLayout<StorageArity = S1>,
 {
@@ -114,6 +114,41 @@ where
 
     fn slice_read<Range: RangeBounds<usize>>(&self, range: Range) -> Self::Read {
         self.slice_usize(range)
+    }
+}
+
+impl<R, T> SliceOutput for DeviceSliceMut<R, T>
+where
+    R: Runtime,
+    T: MStorageElement + StorageLayout<StorageArity = S1>,
+{
+    fn slice_output<Range: RangeBounds<usize>>(&self, range: Range) -> Self {
+        DeviceSliceMut::from_output(self.output.slice_mut_usize(range))
+    }
+}
+
+impl<R, T> OutputExpression for DeviceSliceMut<R, T>
+where
+    R: Runtime,
+    T: MStorageElement + StorageLayout<StorageArity = S1>,
+{
+    type Item = T;
+    type StorageArity = S1;
+
+    fn logical_len(&self) -> Result<usize, Error> {
+        Ok(self.output.len)
+    }
+}
+
+impl<R, T> ReadOutput for DeviceSliceMut<R, T>
+where
+    R: Runtime,
+    T: MStorageElement + StorageLayout<StorageArity = S1>,
+{
+    type Read = Column<T>;
+
+    fn slice_read<Range: RangeBounds<usize>>(&self, range: Range) -> Self::Read {
+        self.output.slice_usize(range)
     }
 }
 
@@ -191,13 +226,22 @@ pub trait BindOutputSlots<Env> {
 
 macro_rules! impl_output_leaf_binding {
     (impl <$( $env_ty:ident ),*> $env:ty => $next:ty) => {
-        impl<T, $( $env_ty ),*> BindOutputSlots<$env> for DeviceSliceMut<T>
+        impl<T, $( $env_ty ),*> BindOutputSlots<$env> for ColumnMut<T>
         where
             T: MStorageElement,
         {
             type NextEnv = $next;
         }
     };
+}
+
+impl<R, T, Env> BindOutputSlots<Env> for DeviceSliceMut<R, T>
+where
+    R: Runtime,
+    T: MStorageElement,
+    ColumnMut<T>: BindOutputSlots<Env>,
+{
+    type NextEnv = <ColumnMut<T> as BindOutputSlots<Env>>::NextEnv;
 }
 
 impl_output_leaf_binding!(impl <> Env0 => Env1<T>);
@@ -398,13 +442,26 @@ pub trait StageOutput<R: Runtime, Env>: BindOutputSlots<Env> {
     fn stage_output(&self, owner: u64, bindings: &mut OutputBindings) -> Result<(), Error>;
 }
 
+impl<R, T, Env> StageOutput<R, Env> for DeviceSliceMut<R, T>
+where
+    R: Runtime,
+    T: MStorageElement,
+    ColumnMut<T>: StageOutput<R, Env>,
+    DeviceSliceMut<R, T>:
+        BindOutputSlots<Env, NextEnv = <ColumnMut<T> as BindOutputSlots<Env>>::NextEnv>,
+{
+    fn stage_output(&self, owner: u64, bindings: &mut OutputBindings) -> Result<(), Error> {
+        self.output.stage_output(owner, bindings)
+    }
+}
+
 macro_rules! impl_output_leaf_staging {
     (impl <$( $env_ty:ident ),*> $env:ty) => {
-        impl<R, T, $( $env_ty ),*> StageOutput<R, $env> for DeviceSliceMut<T>
+        impl<R, T, $( $env_ty ),*> StageOutput<R, $env> for ColumnMut<T>
         where
             R: Runtime,
             T: MStorageElement,
-            DeviceSliceMut<T>: BindOutputSlots<$env>,
+            ColumnMut<T>: BindOutputSlots<$env>,
         {
             fn stage_output(
                 &self,

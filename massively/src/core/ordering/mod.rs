@@ -5,8 +5,8 @@ use core::marker::PhantomData;
 use cubecl::prelude::*;
 
 use crate::{
-    A13, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MStorageElement, MVal,
-    ReadExpression,
+    A13, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MStorageElement, ReadExpression,
+    Scalar,
     arg_reduce::{ArgReduceDispatch, ArgReductionOp, arg_reduce},
     eval::Eval13,
     launch::cube_count_1d,
@@ -991,12 +991,12 @@ pub(crate) fn adjacent_find<R, Input, Equal>(
     exec: &Executor<R>,
     input: Input,
     _equal: Equal,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: AdjacentFindInput<R, Equal>,
 {
-    MVal::from_storage(input.first_adjacent_match(exec)?)
+    Scalar::from_storage(input.first_adjacent_match(exec)?)
 }
 
 /// Internal public-API capability for stable adjacent deduplication.
@@ -1075,12 +1075,12 @@ pub(crate) fn is_sorted_until<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: SortedInput<R, Less>,
 {
-    MVal::from_storage(input.first_sorted_break(exec)?)
+    Scalar::from_storage(input.first_sorted_break(exec)?)
 }
 
 /// Returns the first sorted break, or a sentinel when the input is sorted.
@@ -1088,12 +1088,12 @@ pub(crate) fn is_sorted<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<MVal<R, u32>, Error>
+) -> Result<Scalar<R, u32>, Error>
 where
     R: Runtime,
     Input: SortedInput<R, Less>,
 {
-    MVal::from_storage(input.first_sorted_break(exec)?)
+    Scalar::from_storage(input.first_sorted_break(exec)?)
 }
 
 /// Internal public-API capability for extremum queries.
@@ -1131,12 +1131,12 @@ pub(crate) fn min_element<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: ExtremumInput<R, Less>,
 {
-    MVal::from_storage(input.first_minimum(exec)?)
+    Scalar::from_storage(input.first_minimum(exec)?)
 }
 
 /// Returns the first maximum element index.
@@ -1144,12 +1144,12 @@ pub(crate) fn max_element<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: ExtremumInput<R, Less>,
 {
-    MVal::from_storage(input.first_maximum(exec)?)
+    Scalar::from_storage(input.first_maximum(exec)?)
 }
 
 /// Returns the last minimum and first maximum indices.
@@ -1157,13 +1157,13 @@ pub(crate) fn minmax_element<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<(MVal<R, MIndex>, MVal<R, MIndex>), Error>
+) -> Result<(Scalar<R, MIndex>, Scalar<R, MIndex>), Error>
 where
     R: Runtime,
     Input: ExtremumInput<R, Less>,
 {
-    let min = MVal::from_storage(input.last_minimum(exec)?)?;
-    let max = MVal::from_storage(input.first_maximum(exec)?)?;
+    let min = Scalar::from_storage(input.last_minimum(exec)?)?;
+    let max = Scalar::from_storage(input.first_maximum(exec)?)?;
     Ok((min, max))
 }
 

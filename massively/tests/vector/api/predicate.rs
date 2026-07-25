@@ -1,6 +1,6 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-use massively::{Executor, MIndex, lazy, op::PredicateOp, vector::count_if};
+use massively::{Executor, MIndex, MVal, lazy, op::PredicateOp, vector::count_if};
 
 struct Even;
 
@@ -18,5 +18,8 @@ fn count_if_lazy_four_billion_elements() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let input = lazy::counting(0).take(4_000_000_000u32);
 
-    assert_eq!(count_if(&exec, input, Even).unwrap(), 2_000_000_000u32);
+    assert_eq!(
+        count_if(&exec, input, Even).unwrap().read(&exec).unwrap(),
+        2_000_000_000u32
+    );
 }

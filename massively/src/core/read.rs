@@ -23,9 +23,10 @@ use crate::{
     value::MStorageElement,
 };
 
-/// Read-only contiguous device view. Cloning a view does not copy device data.
+/// Internal runtime-erased contiguous device read leaf.
+#[doc(hidden)]
 #[derive(Clone, Debug, Default)]
-pub struct DeviceSlice<T> {
+pub struct Column<T> {
     pub(crate) handle: Option<cubecl::server::Handle>,
     pub(crate) len: usize,
     pub(crate) buffer_len: usize,
@@ -35,8 +36,9 @@ pub struct DeviceSlice<T> {
     _item: PhantomData<fn() -> T>,
 }
 
-impl<T> DeviceSlice<T> {
-    pub const fn new() -> Self {
+impl<T> Column<T> {
+    #[cfg(test)]
+    pub(crate) const fn new() -> Self {
         Self {
             handle: None,
             len: 0,
@@ -89,37 +91,6 @@ impl<T> DeviceSlice<T> {
         self
     }
 
-    /// Returns the number of rows covered by this view.
-    pub fn len(&self) -> MIndex {
-        MIndex::try_from(self.len).expect("device slice length does not fit in MIndex")
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns a read-only subview without copying device data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-    /// use massively::Executor;
-    ///
-    /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-    /// let values = exec.to_device(&[1_u32, 2, 3, 4, 5]);
-    /// let nested = values.slice(1..5).slice(1..3);
-    ///
-    /// assert_eq!(exec.to_host(&nested).unwrap(), vec![3, 4]);
-    /// ```
-    pub fn slice<Range>(&self, range: Range) -> Self
-    where
-        Range: RangeBounds<MIndex>,
-    {
-        let (relative, len) = resolve_mindex_slice_range(self.len, range);
-        self.slice_usize(relative..relative + len)
-    }
-
     pub(crate) fn slice_usize<Range>(&self, range: Range) -> Self
     where
         Range: RangeBounds<usize>,
@@ -163,9 +134,6 @@ where
     (start as usize, (end - start) as usize)
 }
 
-/// Internal name for a staged physical read leaf.
-pub(crate) type Column<T> = DeviceSlice<T>;
-
 pub(crate) fn resolve_slice_range<Range>(len: usize, range: Range) -> (usize, usize)
 where
     Range: RangeBounds<usize>,
@@ -196,6 +164,21 @@ where
 pub struct Constant<T> {
     pub value: T,
     pub len: usize,
+}
+
+/// One scalar read leaf whose bytes may originate on either host or device.
+///
+/// Both variants use the same direct one-slot device expression. The host
+/// variant creates its one-element binding only when a consumer stages the
+/// expression.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub enum Value<T> {
+    Host(T),
+    Device {
+        handle: cubecl::server::Handle,
+        owner: u64,
+    },
 }
 
 impl<T> Constant<T> {
@@ -492,6 +475,14 @@ where
     type ReadArity = A1;
 }
 
+impl<T> ReadExpression for Value<T>
+where
+    T: MStorageElement,
+{
+    type Item = T;
+    type ReadArity = A1;
+}
+
 impl ReadExpression for Counting {
     type Item = crate::MIndex;
     type ReadArity = A1;
@@ -637,6 +628,19 @@ where
 {
     fn slice_expression(&self, _start: usize, len: usize) -> Self {
         Self::new(self.value, len)
+    }
+}
+
+impl<T> SliceExpression for Value<T>
+where
+    T: MStorageElement,
+{
+    fn slice_expression(&self, start: usize, len: usize) -> Self {
+        assert!(
+            start == 0 && len <= 1,
+            "value iterator slice is out of bounds"
+        );
+        self.clone()
     }
 }
 
@@ -878,6 +882,14 @@ macro_rules! impl_leaf_binding {
             T: MStorageElement,
         {
             type Expr = $slot<T, Broadcast>;
+            type NextEnv = $column_next;
+        }
+
+        impl<T, $( $env_ty ),*> BindSlots<$env> for Value<T>
+        where
+            T: MStorageElement,
+        {
+            type Expr = $slot<T, Direct>;
             type NextEnv = $column_next;
         }
 

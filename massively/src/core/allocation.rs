@@ -7,9 +7,9 @@ use std::ops::RangeBounds;
 use cubecl::prelude::Runtime;
 
 use crate::{
-    Column, DeviceSliceMut, DeviceVec, Error, Executor, MStorageElement, ReadExpression, S1,
+    Column, ColumnMut, DeviceVec, Error, Executor, MStorageElement, ReadExpression, S1,
     StorageLayout, Zip,
-    api::iter::{MAlloc, MIter, MIterMut, MStorage, StorageSlice, StorageSliceMut},
+    api::iter::{MAlloc, MIter, MIterMut, MStorage, MStorageExtent, StorageSlice, StorageSliceMut},
     output::{
         LowerOutputExpression, OutputExpression, PaddedOutputSlots, SliceOutput, StageOutput,
     },
@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Owned storage that can produce read and mutable output trees.
-pub trait RowStorage<R: Runtime> {
+pub trait RowStorage<R: Runtime>: Clone + Send + Sync + 'static {
     type Item: StorageLayout;
     type ReadSlots: SlotEnvironment + crate::read::PaddedReadSlots;
     type WriteSlots: PaddedOutputSlots<Leaves = <Self::Item as StorageLayout>::StorageLeaves>;
@@ -61,7 +61,7 @@ where
     type ReadSlots = crate::read::Env1<T>;
     type WriteSlots = crate::read::Env1<T>;
     type Read = Column<T>;
-    type Write = DeviceSliceMut<T>;
+    type Write = ColumnMut<T>;
 
     fn len(&self) -> Result<usize, Error> {
         Ok(self.capacity())
@@ -109,7 +109,7 @@ where
     Column<T>: ReadExpression<Item = T, ReadArity = crate::A1>
         + LowerReadExpression<Slots = crate::read::Env1<T>>
         + StageRead<R, Env0>,
-    DeviceSliceMut<T>: OutputExpression<Item = T, StorageArity = S1>
+    ColumnMut<T>: OutputExpression<Item = T, StorageArity = S1>
         + LowerOutputExpression<Slots = crate::read::Env1<T>>
         + StageOutput<R, Env0>,
 {
@@ -685,27 +685,16 @@ where
     T: MStorageElement + StorageLayout<StorageArity = S1, StorageLeaves = Last<T>>,
     Last<T>: crate::core::facade::KernelValue,
     Column<T>: crate::api::iter::MIter<R, Item = T>,
-    DeviceSliceMut<T>: crate::api::iter::MIterMut<R, Item = T>,
+    crate::DeviceSlice<R, T>: crate::api::iter::MIter<R, Item = T>,
+    crate::DeviceSliceMut<R, T>: crate::api::iter::MIterMut<R, Item = T>,
 {
     type Item = T;
     type Columns = Self;
-    type Slice<'a> = crate::DeviceSlice<T>;
-    type SliceMut<'a> = DeviceSliceMut<T>;
+    type Slice<'a> = crate::DeviceSlice<R, T>;
+    type SliceMut<'a> = crate::DeviceSliceMut<R, T>;
 
-    fn allocate(exec: &Executor<R>, len: usize) -> Self {
-        exec.alloc_column::<T>(len)
-    }
-
-    fn capacity(&self) -> Result<crate::MIndex, Error> {
-        crate::api::iter::logical_len(self.capacity())
-    }
-
-    fn logical_extent(&self) -> crate::extent::LogicalExtent {
-        DeviceVec::logical_extent(self)
-    }
-
-    fn set_logical_extent(&mut self, extent: crate::extent::LogicalExtent) {
-        DeviceVec::set_logical_extent(self, extent);
+    fn allocate(exec: &Executor<R>, len: crate::MIndex) -> Self {
+        exec.alloc_column::<T>(len as usize)
     }
 
     fn into_columns(self) -> Self::Columns {
@@ -717,7 +706,7 @@ where
         Bounds: RangeBounds<crate::MIndex>,
     {
         let (start, count) = crate::read::resolve_mindex_slice_range(self.capacity(), range);
-        self.slice_usize(start..start + count)
+        crate::DeviceSlice::from_column(self.slice_usize(start..start + count))
     }
 
     fn slice_mut<Bounds>(&self, range: Bounds) -> Self::SliceMut<'_>
@@ -725,7 +714,21 @@ where
         Bounds: RangeBounds<crate::MIndex>,
     {
         let (start, count) = crate::read::resolve_mindex_slice_range(self.capacity(), range);
-        self.slice_mut_usize(start..start + count)
+        crate::DeviceSliceMut::from_output(self.slice_mut_usize(start..start + count))
+    }
+}
+
+impl<R: Runtime, T> MStorageExtent<R> for DeviceVec<R, T> {
+    fn capacity(&self) -> Result<crate::MIndex, Error> {
+        crate::api::iter::logical_len(self.capacity())
+    }
+
+    fn logical_extent(&self) -> crate::extent::LogicalExtent {
+        DeviceVec::logical_extent(self)
+    }
+
+    fn set_logical_extent(&mut self, extent: crate::extent::LogicalExtent) {
+        DeviceVec::set_logical_extent(self, extent);
     }
 }
 
@@ -757,24 +760,8 @@ where
     where
         Self: 'a;
 
-    fn allocate(exec: &Executor<R>, len: usize) -> Self {
+    fn allocate(exec: &Executor<R>, len: crate::MIndex) -> Self {
         Zip::new(Left::allocate(exec, len), Right::allocate(exec, len))
-    }
-
-    fn capacity(&self) -> Result<crate::MIndex, Error> {
-        crate::api::iter::logical_len(RowStorage::len(self)?)
-    }
-
-    fn logical_extent(&self) -> crate::extent::LogicalExtent {
-        self.0
-            .logical_extent()
-            .zipped(&self.1.logical_extent())
-            .expect("storage columns have equal logical extents")
-    }
-
-    fn set_logical_extent(&mut self, extent: crate::extent::LogicalExtent) {
-        self.0.set_logical_extent(extent.clone());
-        self.1.set_logical_extent(extent);
     }
 
     fn into_columns(self) -> Self::Columns {
@@ -785,7 +772,7 @@ where
     where
         Bounds: RangeBounds<crate::MIndex>,
     {
-        let len = MStorage::capacity(self).expect("storage columns have equal lengths");
+        let len = MStorageExtent::capacity(self).expect("storage columns have equal lengths");
         let (start, count) = crate::read::resolve_mindex_slice_range(len as usize, range);
         StorageSlice::new(self, start, count)
     }
@@ -794,16 +781,41 @@ where
     where
         Bounds: RangeBounds<crate::MIndex>,
     {
-        let len = MStorage::capacity(self).expect("storage columns have equal lengths");
+        let len = MStorageExtent::capacity(self).expect("storage columns have equal lengths");
         let (start, count) = crate::read::resolve_mindex_slice_range(len as usize, range);
         StorageSliceMut::new(self, start, count)
+    }
+}
+
+impl<R, Left, Right> MStorageExtent<R> for Zip<Left, Right>
+where
+    R: Runtime,
+    Left: MStorage<R>,
+    Right: MStorage<R>,
+    Self: RowStorage<R>,
+{
+    fn capacity(&self) -> Result<crate::MIndex, Error> {
+        crate::api::iter::logical_len(RowStorage::len(self)?)
+    }
+
+    fn logical_extent(&self) -> crate::extent::LogicalExtent {
+        MStorageExtent::logical_extent(&self.0)
+            .zipped(&MStorageExtent::logical_extent(&self.1))
+            .expect("storage columns have equal logical extents")
+    }
+
+    fn set_logical_extent(&mut self, extent: crate::extent::LogicalExtent) {
+        MStorageExtent::set_logical_extent(&mut self.0, extent.clone());
+        MStorageExtent::set_logical_extent(&mut self.1, extent);
     }
 }
 
 impl<R: Runtime> Executor<R> {
     /// Allocates uninitialized device storage for `len` flat rows.
     ///
-    /// `len` uses [`crate::MIndex`], matching iterator lengths and index-based algorithms.
+    /// `len` is an [`crate::MIndex`] so every allocated row has a representable
+    /// index and a full-length index or permutation vector can always be
+    /// allocated alongside it.
     ///
     /// The storage must be completely written before it is read.
     ///
@@ -826,8 +838,19 @@ impl<R: Runtime> Executor<R> {
     ///
     /// assert_eq!(exec.to_host(&output).unwrap(), vec![7, 7, 7, 7]);
     /// ```
+    ///
+    /// A host-sized length must be checked and converted explicitly:
+    ///
+    /// ```compile_fail
+    /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
+    /// use massively::Executor;
+    ///
+    /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
+    /// let host_len: usize = 4;
+    /// let _ = exec.alloc::<u32>(host_len);
+    /// ```
     pub fn alloc<Item: MAlloc<R>>(&self, len: crate::MIndex) -> crate::MVec<R, Item> {
-        <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len as usize)
+        <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len)
     }
 
     pub(crate) fn alloc_row<Item: RowAlloc<R>>(
@@ -835,42 +858,6 @@ impl<R: Runtime> Executor<R> {
         len: usize,
     ) -> <Item as RowAlloc<R>>::RowStorage {
         <Item as RowAlloc<R>>::alloc(self, len)
-    }
-
-    /// Allocates storage and fills every logical item with `value`.
-    ///
-    /// `len` uses [`crate::MIndex`], matching iterator lengths and index-based algorithms.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-    /// use massively::Executor;
-    ///
-    /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-    /// let values = exec.full(3, 42_u32).unwrap();
-    ///
-    /// assert_eq!(exec.to_host(&values).unwrap(), vec![42, 42, 42]);
-    /// ```
-    pub fn full<Item>(&self, len: crate::MIndex, value: Item) -> Result<crate::MVec<R, Item>, Error>
-    where
-        Item: MAlloc<R>,
-    {
-        let value = self.value(value)?;
-        self.full_value(len as usize, &value)
-    }
-
-    pub(crate) fn full_value<Item>(
-        &self,
-        len: usize,
-        value: &crate::MVal<R, Item>,
-    ) -> Result<crate::MVec<R, Item>, Error>
-    where
-        Item: MAlloc<R>,
-    {
-        let storage = <crate::MVec<R, Item> as MStorage<R>>::allocate(self, len);
-        crate::api::algorithm::fill_value(self, value, MStorage::slice_mut(&storage, ..))?;
-        Ok(storage)
     }
 }
 
@@ -939,9 +926,11 @@ mod tests {
     }
 
     #[test]
-    fn full_writes_and_exposes_flat_columns() {
+    fn fill_writes_and_exposes_flat_columns() {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-        let storage = exec.full::<FlatRow3>(2, (7, 3.5, -2)).unwrap();
+        let storage = exec.alloc::<FlatRow3>(2);
+        crate::api::algorithm::fill(&exec, (7, 3.5, -2), MStorage::slice_mut(&storage, ..))
+            .unwrap();
         let (a, b, c) = storage.into_columns();
 
         assert_eq!(exec.to_host(&a).unwrap(), vec![7, 7]);

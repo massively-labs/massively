@@ -180,7 +180,7 @@ where
     Item: MAlloc<R>,
     Indices: MIter<R, Item = crate::MIndex>,
 {
-    let len = indices.len()?;
+    let len = indices.capacity()?;
     let output = exec.alloc::<Item>(len);
     gather_into(exec, values, indices, output.slice_mut(..))?;
     Ok(output)
@@ -293,7 +293,7 @@ where
     crate::lazy::Reverse<Values>: MIter<R, Item = Item>,
     Item: MAlloc<R>,
 {
-    let len = values.len()?;
+    let len = values.capacity()?;
     let output = exec.alloc::<Item>(len);
     reverse_into(exec, values, output.slice_mut(..))?;
     Ok(output)

@@ -1,18 +1,16 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-use massively::{
-    Error, Executor, MStorage, RadixKey, lazy, op::UnaryOp, vector, zip3, zip7, zip12,
-};
+use massively::{Error, Executor, MRadix, MStorage, lazy, op::UnaryOp, vector, zip3, zip7, zip12};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 struct CompoundKey;
 
 #[test]
 fn radix_keys_are_limited_to_three_columns() {
-    assert_impl_all!(u32: RadixKey<WgpuRuntime>);
-    assert_impl_all!((u32, u32): RadixKey<WgpuRuntime>);
-    assert_impl_all!((u32, u32, u32): RadixKey<WgpuRuntime>);
-    assert_not_impl_any!((u32, u32, u32, u32): RadixKey<WgpuRuntime>);
+    assert_impl_all!(u32: MRadix<WgpuRuntime>);
+    assert_impl_all!((u32, u32): MRadix<WgpuRuntime>);
+    assert_impl_all!((u32, u32, u32): MRadix<WgpuRuntime>);
+    assert_not_impl_any!((u32, u32, u32, u32): MRadix<WgpuRuntime>);
 }
 
 #[cubecl::cube]
@@ -249,7 +247,7 @@ fn radix_sort_by_key_handles_empty_and_rejects_length_mismatch() {
     let empty_values = exec.to_device(&Vec::<u32>::new());
     let output =
         vector::radix_sort_by_key(&exec, empty_keys.slice(..), empty_values.slice(..)).unwrap();
-    assert_eq!(MStorage::len(&output).unwrap(), 0);
+    assert!(exec.to_host(&output).unwrap().is_empty());
 
     let keys = exec.to_device(&[1_u32, 2]);
     let values = exec.to_device(&[10_u32]);

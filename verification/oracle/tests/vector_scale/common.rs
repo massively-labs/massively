@@ -1,8 +1,8 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MFlag, MIndex, MStorage, op::BinaryPredicateOp, op::PredicateOp, op::ReductionOp,
-    op::UnaryOp,
+    Executor, MAlloc, MFlag, MIndex, MStorage, MVal, op::BinaryPredicateOp, op::PredicateOp,
+    op::ReductionOp, op::UnaryOp, vector,
 };
 use oracle::op;
 
@@ -99,36 +99,38 @@ pub fn exec() -> Executor<WgpuRuntime> {
     Executor::new(WgpuDevice::DefaultDevice)
 }
 
-pub fn exact<Storage>(_exec: &Executor<WgpuRuntime>, storage: Storage) -> Storage
+pub fn logical_len<Storage>(exec: &Executor<WgpuRuntime>, storage: &Storage) -> usize
 where
     Storage: MStorage<WgpuRuntime>,
 {
-    storage.len().unwrap();
-    storage
+    vector::length(exec, storage.slice(..))
+        .unwrap()
+        .read(exec)
+        .unwrap() as usize
 }
 
-pub fn exact_pair<Left, Right>(
-    _exec: &Executor<WgpuRuntime>,
-    (left, right): (Left, Right),
-) -> (Left, Right)
+pub fn read_value<T>(exec: &Executor<WgpuRuntime>, value: impl MVal<WgpuRuntime, T>) -> T
 where
-    Left: MStorage<WgpuRuntime>,
-    Right: MStorage<WgpuRuntime>,
+    T: MAlloc<WgpuRuntime>,
 {
-    let len = left.len().unwrap();
-    assert_eq!(right.len().unwrap(), len);
-    (left, right)
+    value.read(exec).unwrap()
 }
 
-pub fn read_optional_index(_exec: &Executor<WgpuRuntime>, value: Option<MIndex>) -> Option<usize> {
-    value.map(|index| index as usize)
+pub fn read_optional_index(
+    exec: &Executor<WgpuRuntime>,
+    value: impl MVal<WgpuRuntime, Option<MIndex>>,
+) -> Option<usize> {
+    value.read(exec).unwrap().map(|index| index as usize)
 }
 
 pub fn read_optional_index_pair(
-    _exec: &Executor<WgpuRuntime>,
-    value: Option<(MIndex, MIndex)>,
+    exec: &Executor<WgpuRuntime>,
+    value: impl MVal<WgpuRuntime, Option<(MIndex, MIndex)>>,
 ) -> Option<(usize, usize)> {
-    value.map(|(first, second)| (first as usize, second as usize))
+    value
+        .read(exec)
+        .unwrap()
+        .map(|(first, second)| (first as usize, second as usize))
 }
 
 pub fn lazify<Input>(input: Input) -> Input

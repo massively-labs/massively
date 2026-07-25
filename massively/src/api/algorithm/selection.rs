@@ -1,8 +1,8 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVal, MVec, op::PredicateOp,
-    op::UnaryOp,
+    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVal, MVec, Scalar,
+    api::iter::MStorageExtent, op::PredicateOp, op::UnaryOp,
 };
 
 struct CopyWhereOperation<'a, R: Runtime, Input, Stencil, const REMOVE: bool> {
@@ -42,9 +42,9 @@ struct PartitionOperation<'a, R: Runtime, Input, Pred> {
     pred: Pred,
 }
 
-struct ReplaceWhereOperation<'a, R: Runtime, Item, Stencil> {
+struct ReplaceWhereOperation<'a, R: Runtime, Item: MAlloc<R>, Stencil> {
     exec: &'a Executor<R>,
-    value: Item,
+    value: Scalar<R, Item>,
     stencil: Stencil,
 }
 
@@ -52,7 +52,7 @@ impl<R, Item, Stencil> crate::api::iter::OutputOperation<R, Item>
     for ReplaceWhereOperation<'_, R, Item, Stencil>
 where
     R: Runtime,
-    Item: CubeType + Send + Sync + 'static,
+    Item: MAlloc<R>,
     Stencil: MIter<R, Item = MFlag>,
 {
     type Result = Result<(), Error>;
@@ -64,7 +64,7 @@ where
     {
         crate::selection::replace_where(
             self.exec,
-            self.value,
+            self.value.into_scratch_storage(),
             crate::api::iter::lower::<R, _>(self.stencil),
             output,
         )
@@ -141,7 +141,6 @@ where
 /// let stencil = exec.to_device(&[1_u32, 0, 1, 0]);
 /// let output = copy_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
 ///
-/// assert_eq!(output.len(), 2);
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![10, 30]);
 /// ```
 pub fn copy_where<R, Input, Item, Stencil>(
@@ -155,10 +154,11 @@ where
     Item: MAlloc<R>,
     Stencil: MIter<R, Item = MFlag>,
 {
-    let capacity = input.len()?;
-    let output = exec.alloc::<Item>(capacity);
+    let capacity = input.capacity()?;
+    let mut output = exec.alloc::<Item>(capacity);
     let len = copy_where_into(exec, input, stencil, output.slice_mut(..))?;
-    crate::api::iter::into_exact_prefix::<R, Item>(exec, output, len.read(exec)?)
+    output.set_logical_extent(len.logical_extent(capacity));
+    Ok(output)
 }
 
 /// Copies rows whose stencil is true into caller-provided storage.
@@ -168,14 +168,14 @@ pub(crate) fn copy_where_into<R, Input, Stencil, Output>(
     input: Input,
     stencil: Stencil,
     output: Output,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
     Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
-    MVal::from_storage(
+    Scalar::from_storage(
         output.run_output_operation(CopyWhereOperation::<_, _, _, false> {
             exec,
             input,
@@ -197,7 +197,6 @@ where
 /// let stencil = exec.to_device(&[1_u32, 0, 1, 0]);
 /// let output = remove_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
 ///
-/// assert_eq!(output.len(), 2);
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![20, 40]);
 /// ```
 pub fn remove_where<R, Input, Item, Stencil>(
@@ -211,10 +210,11 @@ where
     Item: MAlloc<R>,
     Stencil: MIter<R, Item = MFlag>,
 {
-    let capacity = input.len()?;
-    let output = exec.alloc::<Item>(capacity);
+    let capacity = input.capacity()?;
+    let mut output = exec.alloc::<Item>(capacity);
     let len = remove_where_into(exec, input, stencil, output.slice_mut(..))?;
-    crate::api::iter::into_exact_prefix::<R, Item>(exec, output, len.read(exec)?)
+    output.set_logical_extent(len.logical_extent(capacity));
+    Ok(output)
 }
 
 /// Copies rows whose stencil is false into caller-provided storage.
@@ -224,14 +224,14 @@ pub(crate) fn remove_where_into<R, Input, Stencil, Output>(
     input: Input,
     stencil: Stencil,
     output: Output,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
     Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
-    MVal::from_storage(
+    Scalar::from_storage(
         output.run_output_operation(CopyWhereOperation::<_, _, _, true> {
             exec,
             input,
@@ -249,7 +249,7 @@ where
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, op, vector::partition};
+/// use massively::{Executor, MVal, op, vector::partition};
 ///
 /// struct Even;
 ///
@@ -264,23 +264,23 @@ where
 /// let input = exec.to_device(&[1_u32, 2, 3, 4]);
 /// let (output, boundary) = partition(&exec, input.slice(..), Even).unwrap();
 ///
-/// assert_eq!(boundary, 2);
+/// assert_eq!(boundary.read(&exec).unwrap(), 2);
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![2, 4, 1, 3]);
 /// ```
 pub fn partition<R, Input, Item, Pred>(
     exec: &Executor<R>,
     input: Input,
     pred: Pred,
-) -> Result<(MVec<R, Item>, MIndex), Error>
+) -> Result<(MVec<R, Item>, impl MVal<R, MIndex> + Clone), Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Item>,
     Item: MAlloc<R>,
     Pred: PredicateOp<Item>,
 {
-    let len = input.len()?;
+    let len = input.capacity()?;
     let output = exec.alloc::<Item>(len);
-    let boundary = partition_into(exec, input, pred, output.slice_mut(..))?.read(exec)?;
+    let boundary = partition_into(exec, input, pred, output.slice_mut(..))?;
     Ok((output, boundary))
 }
 
@@ -291,14 +291,14 @@ pub(crate) fn partition_into<R, Input, Output, Pred>(
     input: Input,
     pred: Pred,
     output: Output,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
     Output: MIterMut<R>,
     Pred: PredicateOp<Input::Item>,
 {
-    MVal::from_storage(output.run_output_operation(PartitionOperation { exec, input, pred })?)
+    Scalar::from_storage(output.run_output_operation(PartitionOperation { exec, input, pred })?)
 }
 
 /// Fills every output item with one value.
@@ -315,17 +315,9 @@ where
 ///
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![7, 7, 7, 7]);
 /// ```
-pub fn fill<R, Output>(exec: &Executor<R>, value: Output::Item, output: Output) -> Result<(), Error>
-where
-    R: Runtime,
-    Output: MIterMut<R>,
-{
-    output.fill_with(exec, value)
-}
-
-pub(crate) fn fill_value<R, Output>(
+pub fn fill<R, Output>(
     exec: &Executor<R>,
-    value: &MVal<R, Output::Item>,
+    value: impl MVal<R, Output::Item>,
     output: Output,
 ) -> Result<(), Error>
 where
@@ -333,7 +325,26 @@ where
     Output: MIterMut<R>,
     Output::Item: MAlloc<R>,
 {
-    output.run_output_operation(crate::api::iter::FillValueOperation { exec, value })
+    output.run_output_operation(crate::api::iter::FillValueOperation {
+        exec,
+        value: value.as_iter(),
+    })
+}
+
+pub(crate) fn fill_value<R, Output>(
+    exec: &Executor<R>,
+    value: &Scalar<R, Output::Item>,
+    output: Output,
+) -> Result<(), Error>
+where
+    R: Runtime,
+    Output: MIterMut<R>,
+    Output::Item: MAlloc<R>,
+{
+    output.run_output_operation(crate::api::iter::FillValueOperation {
+        exec,
+        value: value.as_iter(),
+    })
 }
 
 /// Replaces output items whose stencil is true.
@@ -347,7 +358,6 @@ where
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let stencil = exec.to_device(&[0_u32, 1, 0, 1]);
 /// let output = exec.to_device(&[10_u32, 20, 30, 40]);
-///
 /// replace_where(&exec, 99_u32, stencil.slice(..), output.slice_mut(..))
 /// .unwrap();
 ///
@@ -355,7 +365,7 @@ where
 /// ```
 pub fn replace_where<R, Stencil, Output>(
     exec: &Executor<R>,
-    value: Output::Item,
+    value: impl MVal<R, Output::Item>,
     stencil: Stencil,
     output: Output,
 ) -> Result<(), Error>
@@ -363,6 +373,23 @@ where
     R: Runtime,
     Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
+    Output::Item: MAlloc<R>,
+{
+    let value = crate::api::value::materialize_value(exec, &value)?;
+    replace_where_value(exec, value, stencil, output)
+}
+
+fn replace_where_value<R, Stencil, Output>(
+    exec: &Executor<R>,
+    value: Scalar<R, Output::Item>,
+    stencil: Stencil,
+    output: Output,
+) -> Result<(), Error>
+where
+    R: Runtime,
+    Stencil: MIter<R, Item = MFlag>,
+    Output: MIterMut<R>,
+    Output::Item: MAlloc<R>,
 {
     output.run_output_operation(ReplaceWhereOperation {
         exec,
@@ -437,15 +464,14 @@ mod tests {
     use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 
     #[test]
-    fn copy_where_returns_an_exact_physical_allocation() {
+    fn copy_where_keeps_physical_storage_private_and_tracks_logical_output() {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[10_u32, 20, 30, 40, 50]);
         let flags = exec.to_device(&[1_u32, 0, 1, 0, 1]);
         let output = copy_where(&exec, input.slice(..), flags.slice(..)).unwrap();
         let bytes = exec.client().read_one(output.handle.clone()).unwrap();
 
-        assert_eq!(output.len(), 3);
-        assert_eq!(bytes.len(), 3 * core::mem::size_of::<u32>());
+        assert_eq!(bytes.len(), 5 * core::mem::size_of::<u32>());
         assert_eq!(exec.to_host(&output).unwrap(), vec![10, 30, 50]);
     }
 }

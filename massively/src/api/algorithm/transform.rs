@@ -1,6 +1,9 @@
 use cubecl::prelude::{CubeType, Runtime};
 
-use crate::{Error, Executor, MAlloc, MIter, MIterMut, MStorage, MVec, op::UnaryOp};
+use crate::{
+    Error, Executor, MAlloc, MIter, MIterMut, MStorage, MVec, api::iter::MStorageExtent,
+    op::UnaryOp,
+};
 
 struct TransformOperation<'a, R: Runtime, Input, Op> {
     exec: &'a Executor<R>,
@@ -96,9 +99,11 @@ where
     Op: UnaryOp<Input::Item>,
     Op::Output: MAlloc<R>,
 {
-    let len = input.len()?;
-    let output = exec.alloc::<Op::Output>(len);
+    let len = input.capacity()?;
+    let extent = input.logical_extent()?;
+    let mut output = exec.alloc::<Op::Output>(len);
     transform_into(exec, input, op, output.slice_mut(..))?;
+    output.set_logical_extent(extent);
     Ok(output)
 }
 

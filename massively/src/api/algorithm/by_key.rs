@@ -3,8 +3,8 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MStorage, MVal, MVec, RadixKey,
-    op::BinaryPredicateOp, op::ReductionOp,
+    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MRadix, MStorage, MVal, MVec, Scalar,
+    api::iter::MStorageExtent, op::BinaryPredicateOp, op::ReductionOp,
 };
 
 struct ByKeyScanOperation<'a, R: Runtime, Keys, Values, Equal, Item: MAlloc<R>, Op> {
@@ -12,7 +12,7 @@ struct ByKeyScanOperation<'a, R: Runtime, Keys, Values, Equal, Item: MAlloc<R>, 
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Option<MVal<R, Item>>,
+    init: Option<Scalar<R, Item>>,
     op: Op,
 }
 
@@ -67,7 +67,7 @@ struct ReduceByKeyValueOperation<
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: MVal<R, ValueItem>,
+    init: Scalar<R, ValueItem>,
     op: Op,
     key_output: KeyOutput,
 }
@@ -86,7 +86,7 @@ struct ReduceByKeyKeyOperation<
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: MVal<R, ValueItem>,
+    init: Scalar<R, ValueItem>,
     op: Op,
     value_output: ValueOutput,
 }
@@ -236,8 +236,8 @@ where
     Values::Item: MAlloc<R>,
     Less: BinaryPredicateOp<Keys::Item>,
 {
-    let len = keys.len()?;
-    let value_len = values.len()?;
+    let len = keys.capacity()?;
+    let value_len = values.capacity()?;
     if len != value_len {
         return Err(Error::LengthMismatch {
             left: len as usize,
@@ -277,12 +277,12 @@ pub fn radix_sort_by_key<R, Keys, Values>(
 where
     R: Runtime,
     Keys: MIter<R>,
-    Keys::Item: RadixKey<R>,
+    Keys::Item: MRadix<R>,
     Values: MIter<R>,
     Values::Item: MAlloc<R>,
 {
-    let len = keys.len()?;
-    let value_len = values.len()?;
+    let len = keys.capacity()?;
+    let value_len = values.capacity()?;
     if len != value_len {
         return Err(Error::LengthMismatch {
             left: len as usize,
@@ -305,7 +305,7 @@ pub(crate) fn radix_sort_values_by_key_into<R, Keys, Values, ValueOutput>(
 where
     R: Runtime,
     Keys: MIter<R>,
-    Keys::Item: RadixKey<R>,
+    Keys::Item: MRadix<R>,
     Values: MIter<R, Item = ValueOutput::Item>,
     ValueOutput: MIterMut<R>,
 {
@@ -320,7 +320,7 @@ where
     let key_storage =
         crate::api::algorithm::transform::map_preserving_extent(exec, keys, crate::op::Identity)?;
     let permutation =
-        <Keys::Item as RadixKey<R>>::radix_permutation(exec, &key_storage, key_len as usize)?;
+        <Keys::Item as MRadix<R>>::radix_permutation(exec, &key_storage, key_len as usize)?;
     crate::api::algorithm::indexed::gather_into(exec, values, permutation.column(), value_output)
 }
 
@@ -411,8 +411,8 @@ where
     Equal: BinaryPredicateOp<Keys::Item>,
     Op: ReductionOp<Values::Item>,
 {
-    let len = keys.len()?;
-    let value_len = values.len()?;
+    let len = keys.capacity()?;
+    let value_len = values.capacity()?;
     if len != value_len {
         return Err(Error::LengthMismatch {
             left: len as usize,
@@ -499,7 +499,7 @@ pub fn exclusive_scan_by_key<R, Keys, Values, Equal, Op>(
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Values::Item,
+    init: impl MVal<R, Values::Item>,
     op: Op,
 ) -> Result<MVec<R, Values::Item>, Error>
 where
@@ -510,8 +510,28 @@ where
     Equal: BinaryPredicateOp<Keys::Item>,
     Op: ReductionOp<Values::Item>,
 {
-    let len = keys.len()?;
-    let value_len = values.len()?;
+    let init = crate::api::value::materialize_value(exec, &init)?;
+    exclusive_scan_by_key_value(exec, keys, values, equal, init, op)
+}
+
+fn exclusive_scan_by_key_value<R, Keys, Values, Equal, Op>(
+    exec: &Executor<R>,
+    keys: Keys,
+    values: Values,
+    equal: Equal,
+    init: Scalar<R, Values::Item>,
+    op: Op,
+) -> Result<MVec<R, Values::Item>, Error>
+where
+    R: Runtime,
+    Keys: MIter<R>,
+    Values: MIter<R>,
+    Values::Item: MAlloc<R>,
+    Equal: BinaryPredicateOp<Keys::Item>,
+    Op: ReductionOp<Values::Item>,
+{
+    let len = keys.capacity()?;
+    let value_len = values.capacity()?;
     if len != value_len {
         return Err(Error::LengthMismatch {
             left: len as usize,
@@ -519,7 +539,6 @@ where
         });
     }
     let output = exec.alloc::<Values::Item>(len);
-    let init = exec.value(init)?;
     exclusive_scan_by_key_into(exec, keys, values, equal, init, op, output.slice_mut(..))?;
     Ok(output)
 }
@@ -531,7 +550,7 @@ pub(crate) fn exclusive_scan_by_key_into<R, Keys, Values, Item, Equal, Op, Outpu
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: MVal<R, Values::Item>,
+    init: Scalar<R, Values::Item>,
     op: Op,
     output: Output,
 ) -> Result<(), Error>
@@ -601,7 +620,7 @@ pub fn reduce_by_key<R, Keys, Values, KeyItem, ValueItem, Equal, Op>(
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: ValueItem,
+    init: impl MVal<R, ValueItem>,
     op: Op,
 ) -> Result<(MVec<R, KeyItem>, MVec<R, ValueItem>), Error>
 where
@@ -613,17 +632,37 @@ where
     Equal: BinaryPredicateOp<KeyItem>,
     Op: ReductionOp<ValueItem>,
 {
-    let capacity = keys.len()?;
-    let value_len = values.len()?;
+    let init = crate::api::value::materialize_value(exec, &init)?;
+    reduce_by_key_value(exec, keys, values, equal, init, op)
+}
+
+fn reduce_by_key_value<R, Keys, Values, KeyItem, ValueItem, Equal, Op>(
+    exec: &Executor<R>,
+    keys: Keys,
+    values: Values,
+    equal: Equal,
+    init: Scalar<R, ValueItem>,
+    op: Op,
+) -> Result<(MVec<R, KeyItem>, MVec<R, ValueItem>), Error>
+where
+    R: Runtime,
+    Keys: MIter<R, Item = KeyItem>,
+    KeyItem: MAlloc<R>,
+    Values: MIter<R, Item = ValueItem>,
+    ValueItem: MAlloc<R>,
+    Equal: BinaryPredicateOp<KeyItem>,
+    Op: ReductionOp<ValueItem>,
+{
+    let capacity = keys.capacity()?;
+    let value_len = values.capacity()?;
     if capacity != value_len {
         return Err(Error::LengthMismatch {
             left: capacity as usize,
             right: value_len as usize,
         });
     }
-    let key_output = exec.alloc::<KeyItem>(capacity);
-    let value_output = exec.alloc::<ValueItem>(capacity);
-    let init = exec.value(init)?;
+    let mut key_output = exec.alloc::<KeyItem>(capacity);
+    let mut value_output = exec.alloc::<ValueItem>(capacity);
     let len = reduce_by_key_into(
         exec,
         keys,
@@ -634,11 +673,10 @@ where
         key_output.slice_mut(..),
         value_output.slice_mut(..),
     )?;
-    let len = len.read(exec)?;
-    Ok((
-        crate::api::iter::into_exact_prefix::<R, KeyItem>(exec, key_output, len)?,
-        crate::api::iter::into_exact_prefix::<R, ValueItem>(exec, value_output, len)?,
-    ))
+    let extent = len.logical_extent(capacity);
+    key_output.set_logical_extent(extent.clone());
+    value_output.set_logical_extent(extent);
+    Ok((key_output, value_output))
 }
 
 /// Reduces by key into caller-provided storage.
@@ -658,11 +696,11 @@ pub(crate) fn reduce_by_key_into<
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: MVal<R, ValueItem>,
+    init: Scalar<R, ValueItem>,
     op: Op,
     key_output: KeyOutput,
     value_output: ValueOutput,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Keys: MIter<R, Item = KeyItem>,
@@ -674,7 +712,7 @@ where
     KeyOutput: MIterMut<R, Item = KeyItem>,
     ValueOutput: MIterMut<R, Item = ValueItem>,
 {
-    MVal::from_storage(
+    Scalar::from_storage(
         value_output.run_output_operation(ReduceByKeyValueOperation {
             exec,
             keys,
@@ -733,17 +771,18 @@ where
     Values::Item: MAlloc<R>,
     Equal: BinaryPredicateOp<Keys::Item>,
 {
-    let capacity = keys.len()?;
-    let value_len = values.len()?;
+    let capacity = keys.capacity()?;
+    let value_len = values.capacity()?;
     if capacity != value_len {
         return Err(Error::LengthMismatch {
             left: capacity as usize,
             right: value_len as usize,
         });
     }
-    let value_output = exec.alloc::<Values::Item>(capacity);
+    let mut value_output = exec.alloc::<Values::Item>(capacity);
     let len = unique_by_key_into(exec, keys, values, equal, value_output.slice_mut(..))?;
-    crate::api::iter::into_exact_prefix::<R, Values::Item>(exec, value_output, len.read(exec)?)
+    value_output.set_logical_extent(len.logical_extent(capacity));
+    Ok(value_output)
 }
 
 /// Keeps the first value of each unique key run in caller-provided storage.
@@ -754,7 +793,7 @@ pub(crate) fn unique_by_key_into<R, Keys, Values, Equal, ValueOutput>(
     values: Values,
     equal: Equal,
     value_output: ValueOutput,
-) -> Result<MVal<R, MIndex>, Error>
+) -> Result<Scalar<R, MIndex>, Error>
 where
     R: Runtime,
     Keys: MIter<R>,
@@ -762,7 +801,7 @@ where
     Equal: BinaryPredicateOp<Keys::Item>,
     ValueOutput: MIterMut<R>,
 {
-    MVal::from_storage(value_output.run_output_operation(UniqueByKeyOperation {
+    Scalar::from_storage(value_output.run_output_operation(UniqueByKeyOperation {
         exec,
         keys,
         values,

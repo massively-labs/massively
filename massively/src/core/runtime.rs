@@ -9,9 +9,14 @@ use std::ops::RangeBounds;
 
 use crate::{Column, Error, MStorageElement, extent::LogicalExtent};
 
-pub use crate::read::DeviceSlice;
-
 static NEXT_EXECUTOR_ID: AtomicU64 = AtomicU64::new(1);
+
+fn assert_indexable_len(len: usize) {
+    assert!(
+        crate::MIndex::try_from(len).is_ok(),
+        "device vector length does not fit in MIndex"
+    );
+}
 
 /// Execution context for one CubeCL runtime.
 #[derive(Clone)]
@@ -69,13 +74,13 @@ impl<R: Runtime> Executor<R> {
     /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     /// let values = exec.to_device(&[10_u32, 20, 30]);
     ///
-    /// assert_eq!(values.len(), 3);
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![10, 20, 30]);
     /// ```
     pub fn to_device<T>(&self, input: &[T]) -> DeviceVec<R, T>
     where
         T: MStorageElement,
     {
+        assert_indexable_len(input.len());
         let handle = if input.is_empty() {
             self.client.empty(size_of::<T>().max(1))
         } else {
@@ -95,6 +100,7 @@ impl<R: Runtime> Executor<R> {
     where
         T: MStorageElement,
     {
+        assert_indexable_len(len);
         DeviceVec {
             handle: self.client.empty(len.max(1) * size_of::<T>()),
             len,
@@ -112,6 +118,7 @@ impl<R: Runtime> Executor<R> {
     where
         T: MStorageElement,
     {
+        assert_indexable_len(len);
         DeviceVec {
             handle,
             len,
@@ -198,6 +205,73 @@ pub struct DeviceVec<R: Runtime, T> {
     _runtime: PhantomData<fn() -> (R, T)>,
 }
 
+/// Read-only contiguous device view tied to its originating runtime.
+#[derive(Clone, Debug)]
+pub struct DeviceSlice<R: Runtime, T> {
+    pub(crate) column: Column<T>,
+    _runtime: PhantomData<fn() -> R>,
+}
+
+impl<R: Runtime, T> DeviceSlice<R, T> {
+    pub(crate) const fn from_column(column: Column<T>) -> Self {
+        Self {
+            column,
+            _runtime: PhantomData,
+        }
+    }
+
+    pub(crate) fn into_column(self) -> Column<T> {
+        self.column
+    }
+
+    /// Returns a read-only subview without copying device data.
+    pub fn slice<Range>(&self, range: Range) -> Self
+    where
+        Range: RangeBounds<crate::MIndex>,
+    {
+        let (offset, len) = crate::read::resolve_mindex_slice_range(self.column.len, range);
+        Self::from_column(self.column.slice_usize(offset..offset + len))
+    }
+}
+
+/// Mutable contiguous device view tied to its originating runtime.
+#[derive(Clone, Debug)]
+pub struct DeviceSliceMut<R: Runtime, T> {
+    pub(crate) output: ColumnMut<T>,
+    _runtime: PhantomData<fn() -> R>,
+}
+
+impl<R: Runtime, T> DeviceSliceMut<R, T> {
+    pub(crate) const fn from_output(output: ColumnMut<T>) -> Self {
+        Self {
+            output,
+            _runtime: PhantomData,
+        }
+    }
+
+    pub(crate) fn into_output(self) -> ColumnMut<T> {
+        self.output
+    }
+
+    /// Returns a read-only subview of this mutable view.
+    pub fn slice<Range>(&self, range: Range) -> DeviceSlice<R, T>
+    where
+        Range: RangeBounds<crate::MIndex>,
+    {
+        let (offset, len) = crate::read::resolve_mindex_slice_range(self.output.len, range);
+        DeviceSlice::from_column(self.output.slice_usize(offset..offset + len))
+    }
+
+    /// Returns a mutable subview of this mutable view.
+    pub fn slice_mut<Range>(&self, range: Range) -> Self
+    where
+        Range: RangeBounds<crate::MIndex>,
+    {
+        let (offset, len) = crate::read::resolve_mindex_slice_range(self.output.len, range);
+        Self::from_output(self.output.slice_mut_usize(offset..offset + len))
+    }
+}
+
 impl<R: Runtime, T> Clone for DeviceVec<R, T> {
     fn clone(&self) -> Self {
         Self {
@@ -211,16 +285,12 @@ impl<R: Runtime, T> Clone for DeviceVec<R, T> {
 }
 
 impl<R: Runtime, T> DeviceVec<R, T> {
-    /// Returns the number of allocated rows.
-    ///
-    /// Publicly returned owned vectors are always exactly sized, so this is
-    /// also their logical length.
-    pub fn len(&self) -> crate::MIndex {
+    pub(crate) fn len(&self) -> crate::MIndex {
         crate::MIndex::try_from(self.len).expect("device vector length does not fit in MIndex")
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     /// Returns the physical allocation bound without synchronizing.
@@ -263,14 +333,15 @@ impl<R: Runtime, T> DeviceVec<R, T> {
     ///
     /// assert_eq!(exec.to_host(&middle).unwrap(), vec![2, 3]);
     /// ```
-    pub fn slice<Range>(&self, range: Range) -> DeviceSlice<T>
+    pub fn slice<Range>(&self, range: Range) -> DeviceSlice<R, T>
     where
         Range: RangeBounds<crate::MIndex>,
     {
-        self.column().slice(range)
+        let (offset, len) = crate::read::resolve_mindex_slice_range(self.len, range);
+        DeviceSlice::from_column(self.column().slice_usize(offset..offset + len))
     }
 
-    pub(crate) fn slice_usize<Range>(&self, range: Range) -> DeviceSlice<T>
+    pub(crate) fn slice_usize<Range>(&self, range: Range) -> Column<T>
     where
         Range: RangeBounds<usize>,
     {
@@ -292,20 +363,20 @@ impl<R: Runtime, T> DeviceVec<R, T> {
     ///
     /// assert_eq!(exec.to_host(&values).unwrap(), vec![1, 9, 9, 4]);
     /// ```
-    pub fn slice_mut<Range>(&self, range: Range) -> DeviceSliceMut<T>
+    pub fn slice_mut<Range>(&self, range: Range) -> DeviceSliceMut<R, T>
     where
         Range: RangeBounds<crate::MIndex>,
     {
         let (offset, len) = crate::read::resolve_mindex_slice_range(self.len, range);
-        self.slice_mut_usize(offset..offset + len)
+        DeviceSliceMut::from_output(self.slice_mut_usize(offset..offset + len))
     }
 
-    pub(crate) fn slice_mut_usize<Range>(&self, range: Range) -> DeviceSliceMut<T>
+    pub(crate) fn slice_mut_usize<Range>(&self, range: Range) -> ColumnMut<T>
     where
         Range: RangeBounds<usize>,
     {
         let (offset, len) = crate::read::resolve_slice_range(self.len, range);
-        DeviceSliceMut {
+        ColumnMut {
             handle: self.handle.clone(),
             len,
             offset: offset as u32,
@@ -354,11 +425,11 @@ impl<R: Runtime, T: MStorageElement> DeviceRange for DeviceVec<R, T> {
     }
 }
 
-impl<T: MStorageElement> DeviceRange for DeviceSlice<T> {
+impl<T: MStorageElement> DeviceRange for Column<T> {
     type Element = T;
     type HostElement = T;
     fn handle(&self) -> cubecl::server::Handle {
-        self.handle.clone().expect("bound device slice")
+        self.handle.clone().expect("bound device column")
     }
     fn capacity(&self) -> usize {
         self.len
@@ -367,7 +438,7 @@ impl<T: MStorageElement> DeviceRange for DeviceSlice<T> {
         self.offset as usize
     }
     fn owner(&self) -> u64 {
-        self.owner.expect("bound device slice")
+        self.owner.expect("bound device column")
     }
     fn extent(&self) -> LogicalExtent {
         self.extent.clone()
@@ -377,9 +448,33 @@ impl<T: MStorageElement> DeviceRange for DeviceSlice<T> {
     }
 }
 
-/// Mutable contiguous output view. Cloning a view does not copy device data.
+impl<R: Runtime, T: MStorageElement> DeviceRange for DeviceSlice<R, T> {
+    type Element = T;
+    type HostElement = T;
+    fn handle(&self) -> cubecl::server::Handle {
+        self.column.handle.clone().expect("bound device slice")
+    }
+    fn capacity(&self) -> usize {
+        self.column.len
+    }
+    fn offset(&self) -> usize {
+        self.column.offset as usize
+    }
+    fn owner(&self) -> u64 {
+        self.column.owner.expect("bound device slice")
+    }
+    fn extent(&self) -> LogicalExtent {
+        self.column.extent.clone()
+    }
+    fn to_host_element(value: T) -> T {
+        value
+    }
+}
+
+/// Internal runtime-erased mutable output leaf.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
-pub struct DeviceSliceMut<T> {
+pub struct ColumnMut<T> {
     pub(crate) handle: cubecl::server::Handle,
     pub(crate) len: usize,
     pub(crate) offset: u32,
@@ -389,43 +484,12 @@ pub struct DeviceSliceMut<T> {
     pub(crate) _item: PhantomData<fn() -> T>,
 }
 
-impl<T> DeviceSliceMut<T> {
-    pub fn len(&self) -> crate::MIndex {
-        crate::MIndex::try_from(self.len).expect("device slice length does not fit in MIndex")
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
+impl<T> ColumnMut<T> {
     pub(crate) fn capacity(&self) -> usize {
         self.len
     }
 
-    /// Returns a read-only subview of this mutable view.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-    /// use massively::Executor;
-    ///
-    /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-    /// let values = exec.to_device(&[1_u32, 2, 3, 4, 5]);
-    /// let writable = values.slice_mut(1..5);
-    /// let readable = writable.slice(1..3);
-    ///
-    /// assert_eq!(exec.to_host(&readable).unwrap(), vec![3, 4]);
-    /// ```
-    pub fn slice<Range>(&self, range: Range) -> DeviceSlice<T>
-    where
-        Range: RangeBounds<crate::MIndex>,
-    {
-        let (offset, len) = crate::read::resolve_mindex_slice_range(self.len, range);
-        self.slice_usize(offset..offset + len)
-    }
-
-    pub(crate) fn slice_usize<Range>(&self, range: Range) -> DeviceSlice<T>
+    pub(crate) fn slice_usize<Range>(&self, range: Range) -> Column<T>
     where
         Range: RangeBounds<usize>,
     {
@@ -438,30 +502,6 @@ impl<T> DeviceSliceMut<T> {
             self.buffer_len,
         )
         .with_logical_extent(self.extent.slice(offset, len))
-    }
-
-    /// Returns a mutable subview of this mutable view.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-    /// use massively::{Executor, lazy, vector::replace_where};
-    ///
-    /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-    /// let values = exec.to_device(&[1_u32, 2, 3, 4, 5]);
-    /// let writable = values.slice_mut(1..5);
-    /// let stencil = lazy::constant(1_u32).take(2);
-    /// replace_where(&exec, 9_u32, stencil, writable.slice_mut(1..3)).unwrap();
-    ///
-    /// assert_eq!(exec.to_host(&values).unwrap(), vec![1, 2, 9, 9, 5]);
-    /// ```
-    pub fn slice_mut<Range>(&self, range: Range) -> Self
-    where
-        Range: RangeBounds<crate::MIndex>,
-    {
-        let (offset, len) = crate::read::resolve_mindex_slice_range(self.len, range);
-        self.slice_mut_usize(offset..offset + len)
     }
 
     pub(crate) fn slice_mut_usize<Range>(&self, range: Range) -> Self
@@ -481,25 +521,40 @@ impl<T> DeviceSliceMut<T> {
     }
 }
 
-impl<T: MStorageElement> DeviceRange for DeviceSliceMut<T> {
+impl<R: Runtime, T: MStorageElement> DeviceRange for DeviceSliceMut<R, T> {
     type Element = T;
     type HostElement = T;
     fn handle(&self) -> cubecl::server::Handle {
-        self.handle.clone()
+        self.output.handle.clone()
     }
     fn capacity(&self) -> usize {
-        self.len
+        self.output.len
     }
     fn offset(&self) -> usize {
-        self.offset as usize
+        self.output.offset as usize
     }
     fn owner(&self) -> u64 {
-        self.owner
+        self.output.owner
     }
     fn extent(&self) -> LogicalExtent {
-        self.extent.clone()
+        self.output.extent.clone()
     }
     fn to_host_element(value: T) -> T {
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn maximum_mindex_length_is_indexable() {
+        super::assert_indexable_len(crate::MIndex::MAX as usize);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "device vector length does not fit in MIndex")]
+    fn length_above_mindex_is_rejected_before_allocation() {
+        super::assert_indexable_len(crate::MIndex::MAX as usize + 1);
     }
 }
