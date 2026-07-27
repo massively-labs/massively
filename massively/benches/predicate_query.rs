@@ -4,7 +4,7 @@ use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_ma
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MVal, lazy, op::PredicateOp, vector::all_of, vector::any_of, vector::count_if,
+    Executor, lazy, op::PredicateOp, vector::all_of, vector::any_of, vector::count_if,
     vector::find_if, vector::is_partitioned, vector::none_of, zip7,
 };
 
@@ -35,63 +35,23 @@ fn bench_predicate_query(c: &mut Criterion) {
 
     for &len in SIZES {
         group.bench_function(BenchmarkId::new("count_if_lazy", len), |b| {
-            b.iter(|| {
-                black_box(
-                    count_if(&exec, lazy::counting(0).take(len as u32), Even)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
-            })
+            b.iter(|| black_box(count_if(&exec, lazy::counting(0).take(len as u32), Even).unwrap()))
         });
         group.bench_function(BenchmarkId::new("all_of_lazy", len), |b| {
-            b.iter(|| {
-                black_box(
-                    all_of(&exec, lazy::counting(0).take(len as u32), Even)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
-            })
+            b.iter(|| black_box(all_of(&exec, lazy::counting(0).take(len as u32), Even).unwrap()))
         });
         group.bench_function(BenchmarkId::new("any_of_lazy", len), |b| {
-            b.iter(|| {
-                black_box(
-                    any_of(&exec, lazy::counting(0).take(len as u32), Even)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
-            })
+            b.iter(|| black_box(any_of(&exec, lazy::counting(0).take(len as u32), Even).unwrap()))
         });
         group.bench_function(BenchmarkId::new("none_of_lazy", len), |b| {
-            b.iter(|| {
-                black_box(
-                    none_of(&exec, lazy::counting(0).take(len as u32), Even)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
-            })
+            b.iter(|| black_box(none_of(&exec, lazy::counting(0).take(len as u32), Even).unwrap()))
         });
         group.bench_function(BenchmarkId::new("find_if_lazy", len), |b| {
-            b.iter(|| {
-                black_box(
-                    find_if(&exec, lazy::counting(0).take(len as u32), Even)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
-            })
+            b.iter(|| black_box(find_if(&exec, lazy::counting(0).take(len as u32), Even).unwrap()))
         });
         group.bench_function(BenchmarkId::new("is_partitioned_lazy", len), |b| {
             b.iter(|| {
-                black_box(
-                    is_partitioned(&exec, lazy::counting(0).take(len as u32), Even)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
+                black_box(is_partitioned(&exec, lazy::counting(0).take(len as u32), Even).unwrap())
             })
         });
 
@@ -115,8 +75,6 @@ fn bench_predicate_query(c: &mut Criterion) {
                         ),
                         FirstLeafEven,
                     )
-                    .unwrap()
-                    .read(&exec)
                     .unwrap(),
                 )
             })

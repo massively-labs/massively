@@ -1,8 +1,8 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MAlloc, MFlag, MIndex, MStorage, MVal, op::BinaryPredicateOp, op::PredicateOp,
-    op::ReductionOp, op::UnaryOp, vector,
+    Executor, MFlag, MIndex, MStorage, op::BinaryPredicateOp, op::PredicateOp, op::ReductionOp,
+    op::UnaryOp, vector,
 };
 use oracle::op;
 
@@ -103,34 +103,22 @@ pub fn logical_len<Storage>(exec: &Executor<WgpuRuntime>, storage: &Storage) -> 
 where
     Storage: MStorage<WgpuRuntime>,
 {
-    vector::length(exec, storage.slice(..))
-        .unwrap()
-        .read(exec)
-        .unwrap() as usize
+    vector::length(exec, storage.slice(..)).unwrap() as usize
 }
 
-pub fn read_value<T>(exec: &Executor<WgpuRuntime>, value: impl MVal<WgpuRuntime, T>) -> T
-where
-    T: MAlloc<WgpuRuntime>,
-{
-    value.read(exec).unwrap()
+pub fn read_value<T>(_exec: &Executor<WgpuRuntime>, value: T) -> T {
+    value
 }
 
-pub fn read_optional_index(
-    exec: &Executor<WgpuRuntime>,
-    value: impl MVal<WgpuRuntime, Option<MIndex>>,
-) -> Option<usize> {
-    value.read(exec).unwrap().map(|index| index as usize)
+pub fn read_optional_index(_exec: &Executor<WgpuRuntime>, value: Option<MIndex>) -> Option<usize> {
+    value.map(|index| index as usize)
 }
 
 pub fn read_optional_index_pair(
-    exec: &Executor<WgpuRuntime>,
-    value: impl MVal<WgpuRuntime, Option<(MIndex, MIndex)>>,
+    _exec: &Executor<WgpuRuntime>,
+    value: Option<(MIndex, MIndex)>,
 ) -> Option<(usize, usize)> {
-    value
-        .read(exec)
-        .unwrap()
-        .map(|(first, second)| (first as usize, second as usize))
+    value.map(|(first, second)| (first as usize, second as usize))
 }
 
 pub fn lazify<Input>(input: Input) -> Input

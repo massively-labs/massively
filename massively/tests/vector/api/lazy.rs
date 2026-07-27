@@ -2,8 +2,8 @@ use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::seg::{Segment, SegmentIterator};
 use massively::{
-    Executor, MIter, MStorage, MVal, lazy, op::ReductionOp, op::UnaryOp, vector::gather,
-    vector::map, vector::reduce, zip2, zip7,
+    Executor, MIter, MStorage, lazy, op::ReductionOp, op::UnaryOp, vector::gather, vector::map,
+    vector::reduce, zip2, zip7,
 };
 
 struct Double;
@@ -87,13 +87,7 @@ fn public_lazy_constructors_compose_as_miter() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 
     let constant: lazy::Taken<lazy::Constant<u32>> = lazy::constant(3_u32).take(4);
-    assert_eq!(
-        reduce(&exec, constant, 0, Sum)
-            .unwrap()
-            .read(&exec)
-            .unwrap(),
-        12
-    );
+    assert_eq!(reduce(&exec, constant, 0, Sum).unwrap(), 12);
 
     let counting: lazy::Taken<lazy::Counting> = lazy::counting(1).take(4);
     let output = map(
@@ -106,13 +100,7 @@ fn public_lazy_constructors_compose_as_miter() {
 
     let values = exec.to_device(&[10_u32, 20, 30, 40]);
     let permuted = lazy::permute(values.slice(..), lazy::counting(0).take(4));
-    assert_eq!(
-        reduce(&exec, permuted, 0, Sum)
-            .unwrap()
-            .read(&exec)
-            .unwrap(),
-        100
-    );
+    assert_eq!(reduce(&exec, permuted, 0, Sum).unwrap(), 100);
 }
 
 #[test]

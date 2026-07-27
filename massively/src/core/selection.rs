@@ -740,10 +740,10 @@ mod tests {
         };
         fill(&exec, (7_u32, 2.5_f32, -3_i32), output()).unwrap();
         let flags = exec.to_device(&[0_u32, 1, 0, 1]);
-        let value = exec.scalar((9_u32, 4.5_f32, -8_i32)).unwrap();
+        let value = crate::api::value::store(&exec, (9_u32, 4.5_f32, -8_i32)).unwrap();
         replace_where(
             &exec,
-            value.into_scratch_storage(),
+            crate::api::value::into_scratch::<WgpuRuntime, (u32, f32, i32)>(value),
             flags.column(),
             output(),
         )

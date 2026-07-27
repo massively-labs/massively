@@ -2,7 +2,7 @@
 set -euo pipefail
 
 forbidden='MExtent|MSequence|Iteration|SegmentKeyInput|SegmentedValues|SegmentContextRead|SegmentRead|CanonicalAlloc|CanonicalStorage|CanonicalAbi|ScratchAbi|SortAbi|ItemDispatch|MutableItem|MutableDispatch|ConcreteOutput|OutputOperation|RadixKeyAbi|RadixStorage|LayoutCompatible|AllocColumns|RowAlloc|ScratchStorage|KernelRow|GatherInput|KernelInput|IterLength|SliceExpression|ReadExpression|OutputExpression|StorageLayout|MaterializeDispatch|ReduceDispatch|ReadArity|StorageArity|Eval[1-8]|\bColumn\b'
-rejected_public_abstractions='MValue|MExtent|MSequence|Iteration|SegmentContexts'
+rejected_public_abstractions='MValue|MVal|Scalar|MExtent|MSequence|Iteration|SegmentContexts'
 
 if rg -n -g '*.html' "$rejected_public_abstractions" target/doc/massively; then
     echo 'rejected abstractions leaked into the public API documentation' >&2
@@ -13,7 +13,6 @@ mapfile -d '' pages < <(
     find target/doc/massively -type f \
         \( -name 'fn.*.html' -o -name 'trait.MRadix.html' \
         -o -name 'trait.MAlloc.html' \
-        -o -name 'trait.MVal.html' \
         -o -name 'trait.MIter.html' -o -name 'trait.MIterMut.html' \
         -o -name 'trait.MStorage.html' \) \
         -print0
@@ -38,14 +37,12 @@ for page in "${legacy_pages[@]}"; do
     test -z "$(find target/doc/massively -type f -name "$page" -print -quit)"
 done
 
-test -f "target/doc/massively/trait.MVal.html"
-test -z "$(find target/doc/massively -type f -name 'struct.Scalar.html' -print -quit)"
+test -z "$(find target/doc/massively -type f \( -name 'trait.MVal.html' -o -name 'struct.Scalar.html' \) -print -quit)"
 test -z "$(find target/doc/massively -type f -name 'trait.MExact.html' -print -quit)"
 test -z "$(find target/doc/massively -type f -name 'fn.into_exact.html' -print -quit)"
 test -z "$(find target/doc/massively -type f \( -name 'struct.LogicalLen.html' -o -name 'struct.LogicalLenIter.html' -o -name 'enum.LogicalExtent.html' \) -print -quit)"
 test ! -e "target/doc/massively/struct.HostVal.html"
 test ! -e "target/doc/massively/struct.DeviceVal.html"
-test ! -e "target/doc/massively/struct.MVal.html"
 
 for arity in {2..12}; do
     test -z "$(find target/doc/massively -type f -name "fn.unzip${arity}.html" -print -quit)"
@@ -73,18 +70,26 @@ for algorithm in "${algorithms[@]}"; do
     test ! -e "target/doc/massively/fn.${algorithm}.html"
 done
 
-scalar_value_algorithms=(
-    exclusive_scan exclusive_scan_by_key fill reduce reduce_by_key replace_where scatter_reduce
+host_value_algorithms=(
+    all_of any_of count_if equal is_partitioned is_sorted is_sorted_until length
+    lexicographical_compare none_of partition reduce
 )
 
-for algorithm in "${scalar_value_algorithms[@]}"; do
-    rg -q 'MVal' "target/doc/massively/vector/fn.${algorithm}.html"
+for algorithm in "${host_value_algorithms[@]}"; do
+    ! rg -q 'MVal|Scalar' "target/doc/massively/vector/fn.${algorithm}.html"
+done
+
+synchronous_optional_index_algorithms=(
+    adjacent_find find_first_of find_if max_element min_element minmax_element mismatch
+)
+
+for algorithm in "${synchronous_optional_index_algorithms[@]}"; do
+    ! rg -q 'MVal' "target/doc/massively/vector/fn.${algorithm}.html"
+    ! rg -q 'Scalar' "target/doc/massively/vector/fn.${algorithm}.html"
 done
 
 mapfile -t executor_pages < <(find target/doc/massively -name 'struct.Executor.html')
 test "${#executor_pages[@]}" -gt 0
-! rg -q 'Scalar' "${executor_pages[@]}"
-! rg -q 'MVal' "${executor_pages[@]}"
 rg -q 'MIndex' "${executor_pages[@]}"
 ! rg -q 'fill_with' "target/doc/massively/trait.MIterMut.html"
 ! rg -q 'method\.(len|is_empty|capacity)' \

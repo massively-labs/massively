@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 
 use crate::{
-    Error, Executor, MAlloc, MFlag, MIter, MIterMut, MVal, RowStorage, Scalar,
+    Error, Executor, MAlloc, MFlag, MIter, MIterMut, MVec, RowStorage,
     op::{BinaryPredicateOp, ReductionOp},
 };
 
@@ -124,7 +124,7 @@ struct ScatterReduceOperation<'a, R: Runtime, Values, Indices, Item: MAlloc<R>, 
     exec: &'a Executor<R>,
     values: Values,
     indices: Indices,
-    init: Scalar<R, Item>,
+    init: MVec<R, Item>,
     op: Op,
 }
 
@@ -197,7 +197,7 @@ where
             sorted_values,
             &heads,
             &head_control,
-            self.init.into_scratch_storage(),
+            crate::api::value::into_scratch::<R, Item>(self.init),
             self.op,
             <<Item as crate::allocation::ScratchStorage<R>>::Storage as RowStorage<R>>::write(
                 &reduced_values,
@@ -378,7 +378,7 @@ pub fn scatter_reduce<R, Values, Indices, Item, Output, Op>(
     exec: &Executor<R>,
     values: Values,
     indices: Indices,
-    init: impl MVal<R, Item>,
+    init: Item,
     op: Op,
     output: Output,
 ) -> Result<(), Error>
@@ -390,7 +390,7 @@ where
     Output: MIterMut<R, Item = Item>,
     Op: ReductionOp<Item>,
 {
-    let init = crate::api::value::materialize_value(exec, &init)?;
+    let init = crate::api::value::store(exec, init)?;
     scatter_reduce_value(exec, values, indices, init, op, output)
 }
 
@@ -398,7 +398,7 @@ pub(crate) fn scatter_reduce_value<R, Values, Indices, Item, Output, Op>(
     exec: &Executor<R>,
     values: Values,
     indices: Indices,
-    init: Scalar<R, Item>,
+    init: MVec<R, Item>,
     op: Op,
     output: Output,
 ) -> Result<(), Error>

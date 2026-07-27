@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use cubecl::prelude::*;
 
 use crate::{
-    A13, DeviceVec, Error, Executor, MStorageElement, ReadExpression, Scalar,
+    A13, DeviceVec, Error, Executor, MStorageElement, MVec, ReadExpression,
     eval::Eval13,
     ordering::BinaryPredicateOp,
     read::{Env0, Env13, LowerReadExpression},
@@ -580,12 +580,12 @@ pub(crate) fn find_first_of<R, Source, Needles, Equal>(
     source: Source,
     needles: Needles,
     _equal: Equal,
-) -> Result<Scalar<R, u32>, Error>
+) -> Result<MVec<R, u32>, Error>
 where
     R: Runtime,
     Source: FindFirstOfInput<R, Needles, Equal>,
 {
-    Scalar::from_storage(source.find_first(exec, needles)?)
+    source.find_first(exec, needles)
 }
 
 /// Internal public-API capability for batched sorted bounds.
@@ -748,13 +748,13 @@ pub(crate) fn equal<R, Left, Right, Equal>(
     left: Left,
     right: Right,
     _equal: Equal,
-) -> Result<Scalar<R, u32>, Error>
+) -> Result<MVec<R, u32>, Error>
 where
     R: Runtime,
     Left: EqualityInput<R, Right, Equal>,
 {
     let (_codes, mismatch, _left_extent, _right_extent) = left.mismatch_control(exec, right)?;
-    Scalar::from_storage(mismatch)
+    Ok(mismatch)
 }
 
 /// Returns the first mismatch, including the shared end when lengths differ.
@@ -763,13 +763,13 @@ pub(crate) fn mismatch<R, Left, Right, Equal>(
     left: Left,
     right: Right,
     _equal: Equal,
-) -> Result<Scalar<R, u32>, Error>
+) -> Result<MVec<R, u32>, Error>
 where
     R: Runtime,
     Left: EqualityInput<R, Right, Equal>,
 {
     let (_codes, mismatch, _left_extent, _right_extent) = left.mismatch_control(exec, right)?;
-    Scalar::from_storage(mismatch)
+    Ok(mismatch)
 }
 
 /// Internal capability hiding fixed-ABI lexicographical dispatch.
@@ -818,7 +818,7 @@ pub(crate) fn lexicographical_compare<R, Left, Right, Less>(
     left: Left,
     right: Right,
     _less: Less,
-) -> Result<Scalar<R, u32>, Error>
+) -> Result<MVec<R, u32>, Error>
 where
     R: Runtime,
     Left: LexicographicalInput<R, Right, Less>,
@@ -841,13 +841,13 @@ where
             BufferArg::from_raw_parts(output.handle.clone(), 1),
         );
     }
-    Scalar::from_storage(output)
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Counting, MVal, Permute, Zip};
+    use crate::{Counting, Permute, Zip};
     use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 
     type Seven = (u32, u32, u32, u32, u32, u32, u32);
@@ -951,17 +951,11 @@ mod tests {
         };
 
         assert_eq!(
-            crate::api::algorithm::equal(&exec, make_left(), make_right(), EqualSeven)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::api::algorithm::equal(&exec, make_left(), make_right(), EqualSeven).unwrap(),
             crate::flag::from_bool(false)
         );
         assert_eq!(
-            crate::api::algorithm::mismatch(&exec, make_left(), make_right(), EqualSeven)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::api::algorithm::mismatch(&exec, make_left(), make_right(), EqualSeven).unwrap(),
             Some(1)
         );
         assert_eq!(
@@ -971,8 +965,6 @@ mod tests {
                 make_right(),
                 LessSeven,
             )
-            .unwrap()
-            .read(&exec)
             .unwrap(),
             crate::flag::from_bool(true)
         );
@@ -991,15 +983,11 @@ mod tests {
                 needles.column(),
                 EqualU32,
             )
-            .unwrap()
-            .read(&exec)
             .unwrap(),
             Some(1)
         );
         assert_eq!(
             crate::api::algorithm::find_first_of(&exec, source.column(), empty.column(), EqualU32,)
-                .unwrap()
-                .read(&exec)
                 .unwrap(),
             None
         );
@@ -1036,8 +1024,6 @@ mod tests {
                 right.column(),
                 LessU32,
             )
-            .unwrap()
-            .read(&exec)
             .unwrap(),
             crate::flag::from_bool(false)
         );

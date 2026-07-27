@@ -5,7 +5,7 @@ use cubecl::prelude::{CubeType, Runtime};
 use std::ops::RangeBounds;
 
 use crate::core::iter::Zip;
-use crate::{Error, Executor, MIndex, MVal};
+use crate::{Error, Executor, MIndex};
 use crate::{
     output::{ReadOutput, SliceOutput},
     read::SliceExpression,
@@ -261,13 +261,13 @@ where
 pub(crate) fn into_exact_prefix<R, Item>(
     exec: &Executor<R>,
     storage: crate::MVec<R, Item>,
-    len: impl MVal<R, MIndex>,
+    len: MIndex,
 ) -> Result<crate::MVec<R, Item>, Error>
 where
     R: Runtime,
     Item: MAlloc<R>,
 {
-    into_exact_prefix_host::<R, Item>(exec, storage, len.read(exec)?)
+    into_exact_prefix_host::<R, Item>(exec, storage, len)
 }
 
 fn into_exact_prefix_host<R, Item>(
@@ -379,7 +379,7 @@ mod radix_private {
 
 /// A flat numeric value with an order-preserving radix representation.
 ///
-/// Scalar leaves may be `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`,
+/// Primitive leaves may be `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`,
 /// `f32`, or `f64`, provided the runtime supports that scalar type. Integers use
 /// their natural ascending numeric order. Floating-point leaves use the same
 /// total order as [`f32::total_cmp`] and [`f64::total_cmp`]. Values may contain
@@ -1429,10 +1429,7 @@ mod tests {
         let keys = crate::read::Transform::new(crate::Counting::new(7, 3), MakeReadOnly);
 
         assert_eq!(
-            crate::vector::is_sorted(&exec, keys, ReadOnlyLess)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::vector::is_sorted(&exec, keys, ReadOnlyLess).unwrap(),
             crate::flag::from_bool(true)
         );
     }
@@ -1526,10 +1523,7 @@ mod tests {
         let right = crate::read::Transform::new(right_values.column(), MakeReadOnlyFromU64);
 
         assert_eq!(
-            crate::vector::equal(&exec, left, right, ReadOnlyEqual)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::vector::equal(&exec, left, right, ReadOnlyEqual).unwrap(),
             crate::flag::from_bool(true)
         );
     }

@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use cubecl::prelude::*;
 
 use crate::{
-    ColumnMut, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, ReadExpression, Scalar,
+    ColumnMut, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MVec, ReadExpression,
     Transform,
     op::{IndexedBinaryOp, IndexedUnaryOp, UnaryOp},
     output::StageOutput,
@@ -20,7 +20,7 @@ use crate::{
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, MVal, op, vector::count_if};
+/// use massively::{Executor, op, vector::count_if};
 ///
 /// struct Positive;
 ///
@@ -35,7 +35,7 @@ use crate::{
 /// let input = exec.to_device(&[-1_i32, 2, 3]);
 ///
 /// let count = count_if(&exec, input.slice(..), Positive).unwrap();
-/// assert_eq!(count.read(&exec).unwrap(), 2);
+/// assert_eq!(count, 2);
 /// ```
 #[cubecl::cube]
 pub trait PredicateOp<Input: CubeType>: 'static + Send + Sync {
@@ -243,12 +243,12 @@ pub(crate) fn count_if<R, Input, Pred>(
     exec: &Executor<R>,
     input: Input,
     _pred: Pred,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: PredicateInput<R, Pred>,
 {
-    Scalar::from_storage(input.predicate_count(exec)?)
+    input.predicate_count(exec)
 }
 
 /// Returns the first matching index, or `u32::MAX` when none matches.
@@ -256,12 +256,12 @@ pub(crate) fn find_if<R, Input, Pred>(
     exec: &Executor<R>,
     input: Input,
     _pred: Pred,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: PredicateInput<R, Pred>,
 {
-    Scalar::from_storage(input.predicate_first(exec)?)
+    input.predicate_first(exec)
 }
 
 /// Returns the first partition violation, or `u32::MAX` when there is none.
@@ -269,12 +269,12 @@ pub(crate) fn is_partitioned<R, Input, Pred>(
     exec: &Executor<R>,
     input: Input,
     _pred: Pred,
-) -> Result<Scalar<R, u32>, Error>
+) -> Result<MVec<R, u32>, Error>
 where
     R: Runtime,
     Input: PredicateInput<R, Pred>,
 {
-    Scalar::from_storage(input.predicate_is_partitioned(exec)?)
+    input.predicate_is_partitioned(exec)
 }
 
 #[cfg(test)]
@@ -282,6 +282,10 @@ mod tests {
     use super::*;
     use crate::{Counting, Permute, Zip};
     use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
+
+    fn read(exec: &Executor<WgpuRuntime>, value: MVec<WgpuRuntime, u32>) -> u32 {
+        crate::api::value::read::<WgpuRuntime, u32>(exec, &value).unwrap()
+    }
 
     struct MatchTriple;
 
@@ -301,45 +305,27 @@ mod tests {
 
         let input = || Zip::new(a.column(), Zip::new(b.column(), c.column()));
         assert_eq!(
-            count_if(&exec, input(), MatchTriple)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, count_if(&exec, input(), MatchTriple).unwrap()),
             2
         );
         assert_eq!(
-            count_if(&exec, input(), MatchTriple)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, count_if(&exec, input(), MatchTriple).unwrap()),
             2
         );
         assert_eq!(
-            count_if(&exec, input(), MatchTriple)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, count_if(&exec, input(), MatchTriple).unwrap()),
             2
         );
         assert_eq!(
-            count_if(&exec, input(), MatchTriple)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, count_if(&exec, input(), MatchTriple).unwrap()),
             2
         );
         assert_eq!(
-            find_if(&exec, input(), MatchTriple)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, find_if(&exec, input(), MatchTriple).unwrap()),
             0
         );
         assert_eq!(
-            is_partitioned(&exec, input(), MatchTriple)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, is_partitioned(&exec, input(), MatchTriple).unwrap(),),
             2
         );
     }
@@ -369,10 +355,7 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[7_u32, 0, 3]);
         assert_eq!(
-            count_if(&exec, input.column(), RawFlag)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, count_if(&exec, input.column(), RawFlag).unwrap()),
             2
         );
     }
@@ -382,10 +365,10 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[20_u32, 0]);
         assert_eq!(
-            is_partitioned(&exec, input.column(), IsEven)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(
+                &exec,
+                is_partitioned(&exec, input.column(), IsEven).unwrap(),
+            ),
             u32::MAX
         );
     }
@@ -423,10 +406,7 @@ mod tests {
         );
         let input = Permute::new(seven, Counting::new(0, 4));
         assert_eq!(
-            count_if(&exec, input, LastLeafIsThree)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, count_if(&exec, input, LastLeafIsThree).unwrap()),
             1
         );
     }
@@ -445,10 +425,7 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[1_u32, 2, 3, 4]);
         assert_eq!(
-            find_if(&exec, input.column(), Never)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            read(&exec, find_if(&exec, input.column(), Never).unwrap()),
             u32::MAX
         );
     }

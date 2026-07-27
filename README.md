@@ -157,27 +157,21 @@ an `MVec`. Algorithms whose semantics require an existing destination, such as
 ```rust
 let output = map(&exec, input, op)?;
 let sum = reduce(&exec, input, zero, sum_op)?;
-let continued = reduce(&exec, more_input, &sum, sum_op)?;
-let host_sum = sum.read(&exec)?;
+let continued = reduce(&exec, more_input, sum, sum_op)?;
 ```
 
-Vector host/device movement remains explicit. Single-value inputs implement `MVal`:
-an ordinary host value is staged only when a GPU consumer needs it, while a
-device-resident value is read back only when host control flow calls `read()`.
-Algorithms take an `Executor`, so those conversions, launches, and ownership
-checks happen at a visible execution boundary.
+Vector host/device movement remains explicit. Single-value inputs are ordinary
+host values and are staged internally when a GPU kernel needs them. Algorithms
+take an `Executor`, so transfers, launches, and ownership checks happen at a
+visible execution boundary.
 
 ### Value And Length Boundaries
 
-The `MVal<R, T>` trait is the common scalar-value contract. Ordinary `T` and
-GPU-produced values can be passed to the same input. A consumer calls
-`MVal::as_iter` when a kernel needs the value or `MVal::read` when allocation
-or host control flow needs it.
-
-GPU-produced scalar results expose only `impl MVal<R, T>` and stay on the
-device until a host consumer calls `read()`.
-`Executor::value` explicitly uploads a host value when callers want to prepare
-or reuse a device-resident value.
+Single-value parameters use their ordinary item type. Single-value results
+synchronize and return ordinary host values. Optional-index queries such as
+`find_if` and `min_element` return `Option<MIndex>` directly. Device-side
+single-value storage remains an implementation detail rather than a public
+composable value abstraction.
 Truth-valued algorithms use `MFlag`, while indices and lengths use `MIndex`.
 Both aliases use `u32`.
 
@@ -199,8 +193,8 @@ propagates through later algorithms without host synchronization.
 nonzero is true. Predicate producers should use `flag::from_bool` to return a
 canonical flag, while stencils accept any `MFlag` value. Consumers should use
 `flag::is_set`; comparing an arbitrary flag to `1` is incorrect because other
-nonzero values are also true. Device-resident summaries expose
-`impl MVal<R, MFlag>`.
+nonzero values are also true. Summary algorithms synchronize and return
+`MFlag`.
 
 ### Device Storage And Slices
 

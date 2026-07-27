@@ -42,7 +42,7 @@ const TILE_SIZE: usize = BLOCK_SIZE as usize * ITEMS_PER_UNIT;
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, MVal, op, vector::reduce};
+/// use massively::{Executor, op, vector::reduce};
 ///
 /// struct Add;
 ///
@@ -58,7 +58,7 @@ const TILE_SIZE: usize = BLOCK_SIZE as usize * ITEMS_PER_UNIT;
 ///
 /// let init = 0_u32;
 /// let sum = reduce(&exec, input.slice(..), init, Add).unwrap();
-/// assert_eq!(sum.read(&exec).unwrap(), 6);
+/// assert_eq!(sum, 6);
 /// ```
 #[cubecl::cube]
 pub trait ReductionOp<Item: CubeType>: 'static + Send + Sync {
@@ -1302,14 +1302,13 @@ mod tests {
         let output = reduce(
             &exec,
             input,
-            exec.scalar(init).unwrap().into_scratch_storage(),
+            crate::api::value::into_scratch::<WgpuRuntime, Seven>(
+                crate::api::value::store(&exec, init).unwrap(),
+            ),
             AddSeven,
         )
         .unwrap();
-        let output = crate::Scalar::<WgpuRuntime, Seven>::from_storage(output)
-            .unwrap()
-            .read(&exec)
-            .unwrap();
+        let output = crate::api::value::read::<WgpuRuntime, Seven>(&exec, &output).unwrap();
         assert_eq!(
             output,
             (

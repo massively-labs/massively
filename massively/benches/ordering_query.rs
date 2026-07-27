@@ -4,7 +4,7 @@ use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_ma
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MVal, lazy, op::BinaryPredicateOp, vector::max_element, vector::min_element,
+    Executor, lazy, op::BinaryPredicateOp, vector::max_element, vector::min_element,
     vector::minmax_element, zip7,
 };
 
@@ -36,31 +36,18 @@ fn bench_ordering_query(c: &mut Criterion) {
     for &len in SIZES {
         group.bench_function(BenchmarkId::new("min_element_lazy", len), |b| {
             b.iter(|| {
-                black_box(
-                    min_element(&exec, lazy::counting(0).take(len as u32), LessU32)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
+                black_box(min_element(&exec, lazy::counting(0).take(len as u32), LessU32).unwrap())
             })
         });
         group.bench_function(BenchmarkId::new("max_element_lazy", len), |b| {
             b.iter(|| {
-                black_box(
-                    max_element(&exec, lazy::counting(0).take(len as u32), LessU32)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
+                black_box(max_element(&exec, lazy::counting(0).take(len as u32), LessU32).unwrap())
             })
         });
         group.bench_function(BenchmarkId::new("minmax_element_lazy", len), |b| {
             b.iter(|| {
                 black_box(
-                    minmax_element(&exec, lazy::counting(0).take(len as u32), LessU32)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
+                    minmax_element(&exec, lazy::counting(0).take(len as u32), LessU32).unwrap(),
                 )
             })
         });
@@ -85,8 +72,6 @@ fn bench_ordering_query(c: &mut Criterion) {
                         ),
                         FirstLeafLess,
                     )
-                    .unwrap()
-                    .read(&exec)
                     .unwrap(),
                 )
             })

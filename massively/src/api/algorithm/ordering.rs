@@ -3,36 +3,9 @@
 use cubecl::prelude::*;
 
 use crate::{
-    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVal, MVec, Scalar,
-    api::iter::MStorageExtent,
-    op::{BinaryPredicateOp, UnaryOp},
+    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVec,
+    api::iter::MStorageExtent, op::BinaryPredicateOp,
 };
-
-struct SentinelToLength;
-
-#[cubecl::cube]
-impl UnaryOp<(MIndex, MIndex)> for SentinelToLength {
-    type Output = MIndex;
-
-    fn apply(input: (MIndex, MIndex)) -> MIndex {
-        if input.0 == MIndex::MAX {
-            input.1
-        } else {
-            input.0
-        }
-    }
-}
-
-struct IsSentinel;
-
-#[cubecl::cube]
-impl UnaryOp<MIndex> for IsSentinel {
-    type Output = MFlag;
-
-    fn apply(input: MIndex) -> MFlag {
-        crate::flag::from_bool(input == MIndex::MAX)
-    }
-}
 
 struct UniqueOperation<'a, R: Runtime, Input, Equal> {
     exec: &'a Executor<R>,
@@ -104,12 +77,14 @@ where
 
 /// Finds the first accepted adjacent pair.
 ///
+/// This operation synchronizes to resolve the optional index on the host.
+///
 /// # Examples
 ///
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{op, Executor, MVal, vector::adjacent_find};
+/// use massively::{op, Executor, vector::adjacent_find};
 ///
 /// struct Equal;
 ///
@@ -125,8 +100,6 @@ where
 ///
 /// assert_eq!(
 ///     adjacent_find(&exec, input.slice(..), Equal)
-///         .unwrap()
-///         .read(&exec)
 ///         .unwrap(),
 ///     Some(1)
 /// );
@@ -135,16 +108,15 @@ pub fn adjacent_find<R, Input, Equal>(
     exec: &Executor<R>,
     input: Input,
     equal: Equal,
-) -> Result<impl MVal<R, Option<MIndex>>, Error>
+) -> Result<Option<MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R>,
     Equal: BinaryPredicateOp<Input::Item>,
 {
-    Ok(
-        crate::ordering::adjacent_find(exec, crate::api::iter::lower_fixed::<R, _>(input), equal)?
-            .into_optional_index(),
-    )
+    let value =
+        crate::ordering::adjacent_find(exec, crate::api::iter::lower_fixed::<R, _>(input), equal)?;
+    crate::api::value::read_optional_index(exec, &value)
 }
 
 /// Removes consecutive duplicates.
@@ -185,7 +157,10 @@ where
     let capacity = input.capacity()?;
     let mut output = exec.alloc::<Item>(capacity);
     let len = unique_into(exec, input, equal, output.slice_mut(..))?;
-    output.set_logical_extent(len.logical_extent(capacity));
+    output.set_logical_extent(crate::extent::LogicalExtent::from_device(
+        &len,
+        capacity as usize,
+    ));
     Ok(output)
 }
 
@@ -198,14 +173,14 @@ pub(crate) fn unique_into<R, Input, Output, Equal>(
     input: Input,
     equal: Equal,
     output: Output,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
     Output: MIterMut<R>,
     Equal: BinaryPredicateOp<Input::Item>,
 {
-    Scalar::from_storage(output.run_output_operation(UniqueOperation { exec, input, equal })?)
+    output.run_output_operation(UniqueOperation { exec, input, equal })
 }
 
 /// Returns the first index at which the input ceases to be sorted.
@@ -215,7 +190,7 @@ where
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{op, Executor, MVal, vector::is_sorted_until};
+/// use massively::{op, Executor, vector::is_sorted_until};
 ///
 /// struct Less;
 ///
@@ -231,8 +206,6 @@ where
 ///
 /// assert_eq!(
 ///     is_sorted_until(&exec, input.slice(..), Less)
-///         .unwrap()
-///         .read(&exec)
 ///         .unwrap(),
 ///     3
 /// );
@@ -241,7 +214,7 @@ pub fn is_sorted_until<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     less: Less,
-) -> Result<impl MVal<R, MIndex> + Clone, Error>
+) -> Result<MIndex, Error>
 where
     R: Runtime,
     Input: MIter<R>,
@@ -250,12 +223,8 @@ where
     let len = input.capacity()?;
     let index =
         crate::ordering::is_sorted_until(exec, crate::api::iter::lower_fixed::<R, _>(input), less)?;
-    let output = crate::vector::map(
-        exec,
-        crate::zip2(index.as_iter(), crate::lazy::constant(len).take(1)),
-        SentinelToLength,
-    )?;
-    Scalar::from_storage(output)
+    let index = crate::api::value::read::<R, MIndex>(exec, &index)?;
+    Ok(if index == MIndex::MAX { len } else { index })
 }
 
 /// Returns whether the input is sorted.
@@ -265,7 +234,7 @@ where
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{op, Executor, MVal, vector::is_sorted};
+/// use massively::{op, Executor, vector::is_sorted};
 ///
 /// struct Less;
 ///
@@ -282,15 +251,13 @@ where
 /// assert!(massively::flag::is_set(
 ///     is_sorted(&exec, input.slice(..), Less)
 ///         .unwrap()
-///         .read(&exec)
-///         .unwrap()
 /// ));
 /// ```
 pub fn is_sorted<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     less: Less,
-) -> Result<impl MVal<R, MFlag> + Clone, Error>
+) -> Result<MFlag, Error>
 where
     R: Runtime,
     Input: MIter<R>,
@@ -298,8 +265,8 @@ where
 {
     let index =
         crate::ordering::is_sorted(exec, crate::api::iter::lower_fixed::<R, _>(input), less)?;
-    let output = crate::vector::map(exec, index.as_iter(), IsSentinel)?;
-    Scalar::from_storage(output)
+    let index = crate::api::value::read::<R, MIndex>(exec, &index)?;
+    Ok(crate::flag::from_bool(index == MIndex::MAX))
 }
 
 macro_rules! extremum_api {
@@ -309,16 +276,15 @@ macro_rules! extremum_api {
             exec: &Executor<R>,
             input: Input,
             less: Less,
-        ) -> Result<impl MVal<R, Option<MIndex>>, Error>
+        ) -> Result<Option<MIndex>, Error>
         where
             R: Runtime,
             Input: MIter<R>,
             Less: BinaryPredicateOp<Input::Item>,
         {
-            Ok(
-                crate::ordering::$name(exec, crate::api::iter::lower_fixed::<R, _>(input), less)?
-                    .into_optional_index(),
-            )
+            let value =
+                crate::ordering::$name(exec, crate::api::iter::lower_fixed::<R, _>(input), less)?;
+            crate::api::value::read_optional_index(exec, &value)
         }
     };
 }
@@ -327,12 +293,14 @@ extremum_api!(
     min_element,
     r#"Returns the first minimum element index.
 
+This operation synchronizes to resolve the optional index on the host.
+
 # Examples
 
 ```
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-use massively::{op, Executor, MVal, vector::min_element};
+use massively::{op, Executor, vector::min_element};
 
 struct Less;
 
@@ -348,8 +316,6 @@ let input = exec.to_device(&[3_u32, 1, 2, 1]);
 
 assert_eq!(
     min_element(&exec, input.slice(..), Less)
-        .unwrap()
-        .read(&exec)
         .unwrap(),
     Some(1)
 );
@@ -360,12 +326,14 @@ extremum_api!(
     max_element,
     r#"Returns the first maximum element index.
 
+This operation synchronizes to resolve the optional index on the host.
+
 # Examples
 
 ```
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-use massively::{op, Executor, MVal, vector::max_element};
+use massively::{op, Executor, vector::max_element};
 
 struct Less;
 
@@ -381,8 +349,6 @@ let input = exec.to_device(&[3_u32, 1, 3, 2]);
 
 assert_eq!(
     max_element(&exec, input.slice(..), Less)
-        .unwrap()
-        .read(&exec)
         .unwrap(),
     Some(0)
 );
@@ -396,7 +362,7 @@ macro_rules! minmax_api {
             exec: &Executor<R>,
             input: Input,
             less: Less,
-        ) -> Result<impl MVal<R, Option<(MIndex, MIndex)>>, Error>
+        ) -> Result<Option<(MIndex, MIndex)>, Error>
         where
             R: Runtime,
             Input: MIter<R>,
@@ -407,11 +373,8 @@ macro_rules! minmax_api {
                 crate::api::iter::lower_fixed::<R, _>(input),
                 less,
             )?;
-            let pair: Scalar<R, (MIndex, MIndex)> = Scalar::from_storage(crate::Zip::new(
-                minimum.into_storage(),
-                maximum.into_storage(),
-            ))?;
-            Ok(pair.into_optional_index_pair())
+            let pair: MVec<R, (MIndex, MIndex)> = crate::Zip::new(minimum, maximum);
+            crate::api::value::read_optional_index_pair(exec, &pair)
         }
     };
 }
@@ -419,12 +382,14 @@ macro_rules! minmax_api {
 minmax_api!(
     r#"Returns the minimum and maximum element indices.
 
+This operation synchronizes to resolve the optional indices on the host.
+
 # Examples
 
 ```
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-use massively::{op, Executor, MVal, vector::minmax_element};
+use massively::{op, Executor, vector::minmax_element};
 
 struct Less;
 
@@ -440,8 +405,6 @@ let input = exec.to_device(&[3_u32, 1, 4, 2]);
 
 assert_eq!(
     minmax_element(&exec, input.slice(..), Less)
-        .unwrap()
-        .read(&exec)
         .unwrap(),
     Some((1, 2))
 );

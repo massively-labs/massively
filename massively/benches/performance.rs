@@ -3,7 +3,7 @@ mod common;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use massively::{
-    MVal, lazy,
+    lazy,
     op::{BinaryPredicateOp, PredicateOp, ReductionOp, UnaryOp},
     vector::{
         all_of, any_of, copy_where, count_if, exclusive_scan, exclusive_scan_by_key, find_if,
@@ -183,8 +183,6 @@ fn bench_performance(c: &mut Criterion) {
                 SumF32,
             )
             .unwrap()
-            .read(&exec)
-            .unwrap()
         );
         benchmark_synchronous!(
             group,
@@ -218,7 +216,7 @@ fn bench_performance(c: &mut Criterion) {
         benchmark_synchronous!(group, "partition", {
             let (output, boundary) =
                 partition(&exec, black_box(values.slice(..)), PositiveF32).unwrap();
-            black_box(boundary.read(&exec).unwrap());
+            black_box(boundary);
             output
         });
         benchmark_synchronous!(
@@ -482,74 +480,47 @@ fn bench_performance(c: &mut Criterion) {
     benchmark_synchronous!(
         group,
         "all_of",
-        all_of(&exec, lazy::counting(0).take(N as u32), EvenIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        all_of(&exec, lazy::counting(0).take(N as u32), EvenIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "any_of",
-        any_of(&exec, lazy::counting(0).take(N as u32), EvenIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        any_of(&exec, lazy::counting(0).take(N as u32), EvenIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "count_if",
-        count_if(&exec, lazy::counting(0).take(N as u32), EvenIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        count_if(&exec, lazy::counting(0).take(N as u32), EvenIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "find_if",
-        find_if(&exec, lazy::counting(0).take(N as u32), EvenIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        find_if(&exec, lazy::counting(0).take(N as u32), EvenIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "is_partitioned",
-        is_partitioned(&exec, lazy::counting(0).take(N as u32), EvenIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        is_partitioned(&exec, lazy::counting(0).take(N as u32), EvenIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "none_of",
-        none_of(&exec, lazy::counting(0).take(N as u32), EvenIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        none_of(&exec, lazy::counting(0).take(N as u32), EvenIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "max_element",
-        max_element(&exec, lazy::counting(0).take(N as u32), LessIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        max_element(&exec, lazy::counting(0).take(N as u32), LessIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "min_element",
-        min_element(&exec, lazy::counting(0).take(N as u32), LessIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        min_element(&exec, lazy::counting(0).take(N as u32), LessIndex).unwrap()
     );
     benchmark_synchronous!(
         group,
         "minmax_element",
-        minmax_element(&exec, lazy::counting(0).take(N as u32), LessIndex)
-            .unwrap()
-            .read(&exec)
-            .unwrap()
+        minmax_element(&exec, lazy::counting(0).take(N as u32), LessIndex).unwrap()
     );
 
     group.finish();

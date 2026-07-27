@@ -3,7 +3,7 @@ mod common;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use massively::{
-    MVal, op::PredicateOp, vector::copy_where, vector::partition, vector::remove_where, zip7,
+    op::PredicateOp, vector::copy_where, vector::partition, vector::remove_where, zip7,
 };
 
 struct Positive;
@@ -42,7 +42,7 @@ fn bench_select(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("partition", len), |b| {
             b.iter(|| {
                 let (output, boundary) = partition(&exec, input.slice(..), Positive).unwrap();
-                criterion::black_box(boundary.read(&exec).unwrap());
+                criterion::black_box(boundary);
                 criterion::black_box(output);
             })
         });

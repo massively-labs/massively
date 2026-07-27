@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MFlag, MStorage, MVal,
+    Executor, MFlag, MStorage,
     op::{BinaryPredicateOp, PredicateOp, ReductionOp, UnaryOp},
     vector,
 };
@@ -93,7 +93,7 @@ fn owned_vector_apis_return_device_storage() {
     vector::fill(&exec, 7_u32, filled.slice_mut(..)).unwrap();
     assert_eq!(exec.to_host(&copied).unwrap(), vec![3, 2]);
     assert_eq!(exec.to_host(&removed).unwrap(), vec![1, 2]);
-    assert_eq!(boundary.read(&exec).unwrap(), 2);
+    assert_eq!(boundary, 2);
     assert_eq!(exec.to_host(&partitioned).unwrap(), vec![2, 2, 3, 1]);
     assert_eq!(exec.to_host(&filled).unwrap(), vec![7, 7, 7]);
 
@@ -140,10 +140,7 @@ fn synchronized_logical_length_flows_through_an_algorithm_pipeline() {
     let unique = vector::unique(&exec, sorted.slice(..), Equal).unwrap();
     let incremented = vector::map(&exec, unique.slice(..), AddOne).unwrap();
     let scanned = vector::inclusive_scan(&exec, incremented.slice(..), Add).unwrap();
-    let sum = vector::reduce(&exec, scanned.slice(..), 0, Add)
-        .unwrap()
-        .read(&exec)
-        .unwrap();
+    let sum = vector::reduce(&exec, scanned.slice(..), 0, Add).unwrap();
 
     assert_eq!(exec.to_host(&unique).unwrap(), vec![1, 3, 5]);
     assert_eq!(exec.to_host(&scanned).unwrap(), vec![2, 6, 12]);
@@ -159,10 +156,7 @@ fn synchronized_zero_length_remains_composable() {
     let compacted = vector::copy_where(&exec, input.slice(..), stencil.slice(..)).unwrap();
     let sorted = vector::sort(&exec, compacted.slice(..), Less).unwrap();
     let unique = vector::unique(&exec, sorted.slice(..), Equal).unwrap();
-    let sum = vector::reduce(&exec, unique.slice(..), 7, Add)
-        .unwrap()
-        .read(&exec)
-        .unwrap();
+    let sum = vector::reduce(&exec, unique.slice(..), 7, Add).unwrap();
 
     assert_eq!(exec.to_host(&unique).unwrap(), Vec::<u32>::new());
     assert_eq!(sum, 7);
@@ -250,7 +244,7 @@ fn owned_by_key_and_flat_tuple_results() {
 }
 
 #[test]
-fn device_values_compose_across_scalar_input_apis() {
+fn host_values_compose_across_single_value_input_apis() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let empty = exec.alloc::<u32>(0);
     let zero = vector::reduce(&exec, empty.slice(..), 0_u32, Add).unwrap();

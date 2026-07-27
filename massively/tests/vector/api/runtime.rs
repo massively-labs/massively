@@ -3,21 +3,11 @@ use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::*;
 
 struct IsTwo;
-struct IsSome;
 
 #[cubecl::cube]
 impl op::PredicateOp<u32> for IsTwo {
     fn apply(value: u32) -> MFlag {
         flag::from_bool(value == 2u32)
-    }
-}
-
-#[cubecl::cube]
-impl op::UnaryOp<Option<MIndex>> for IsSome {
-    type Output = MFlag;
-
-    fn apply(value: Option<MIndex>) -> MFlag {
-        flag::from_bool(value.is_some())
     }
 }
 
@@ -85,28 +75,6 @@ fn allocation_lengths_are_mindex_values() {
 }
 
 #[test]
-fn host_values_round_trip_through_mval() {
-    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-
-    assert_eq!(7_u32.read(&exec).unwrap(), 7);
-    let pair = (3_u32, 2.5_f32);
-    assert_eq!(pair.read(&exec).unwrap(), (3, 2.5));
-}
-
-#[test]
-fn mval_resolves_host_and_device_representations_in_both_directions() {
-    let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
-
-    assert_eq!(7_u32.read(&exec).unwrap(), 7);
-    let host_iter = <u32 as MVal<WgpuRuntime, u32>>::as_iter(&7_u32);
-    let uploaded = vector::map(&exec, host_iter, op::Identity).unwrap();
-    assert_eq!(exec.to_host(&uploaded).unwrap(), vec![7]);
-
-    let host = 11_u32;
-    assert_eq!(host.read(&exec).unwrap(), 11);
-}
-
-#[test]
 fn host_value_exposes_a_one_item_iterator() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let indices = lazy::constant(0_u32).take(3);
@@ -119,24 +87,14 @@ fn host_value_exposes_a_one_item_iterator() {
 }
 
 #[test]
-fn encoded_values_decode_lazily_on_device_and_host() {
+fn optional_indices_are_resolved_on_the_host() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let values = exec.to_device(&[1_u32, 2, 3]);
 
     let found = vector::find_if(&exec, values.slice(..), IsTwo).unwrap();
-    let found_flag = vector::map(&exec, found.as_iter(), IsSome).unwrap();
-    assert_eq!(
-        exec.to_host(&found_flag).unwrap(),
-        vec![flag::from_bool(true)]
-    );
-    assert_eq!(found.read(&exec).unwrap(), Some(1));
+    assert_eq!(found, Some(1));
 
     let empty = exec.to_device(&[] as &[u32]);
     let missing = vector::find_if(&exec, empty.slice(..), IsTwo).unwrap();
-    let missing_flag = vector::map(&exec, missing.as_iter(), IsSome).unwrap();
-    assert_eq!(
-        exec.to_host(&missing_flag).unwrap(),
-        vec![flag::from_bool(false)]
-    );
-    assert_eq!(missing.read(&exec).unwrap(), None);
+    assert_eq!(missing, None);
 }

@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 use std::ops::RangeBounds;
 
-use crate::{DeviceSlice, DeviceVec, Error, Executor, MIndex, MIter, MVal, api::iter::MIterExtent};
+use crate::{DeviceSlice, DeviceVec, Error, Executor, MIndex, MIter, api::iter::MIterExtent};
 
 use super::{ExclusiveScan, Executable, ForEachSegment, SegmentIterator};
 
@@ -272,12 +272,12 @@ impl<R: Runtime> Segmentation<R> {
     pub fn from_segment_ids<Ids>(
         exec: &Executor<R>,
         ids: Ids,
-        segment_count: impl MVal<R, MIndex>,
+        segment_count: MIndex,
     ) -> Result<Self, Error>
     where
         Ids: MIter<R, Item = MIndex>,
     {
-        Self::from_segment_ids_host(exec, ids, segment_count.read(exec)?)
+        Self::from_segment_ids_host(exec, ids, segment_count)
     }
 
     fn from_segment_ids_host<Ids>(

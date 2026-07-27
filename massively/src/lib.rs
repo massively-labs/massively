@@ -36,7 +36,6 @@
 //! - [`DeviceVec`], [`DeviceSlice`], and [`DeviceSliceMut`] are the owning and borrowed device
 //!   containers used at API boundaries.
 //! - [`MIter`] and [`MIterMut`] are the public iterator capabilities accepted by algorithms.
-//! - [`MVal`] is the common host/device value contract for host and device-resident values.
 //! - [`zip2`] through [`zip12`] combine columns into native flat row tuples.
 //! - [`lazy`] provides allocation-free sources and adapters.
 //! - [`op`] contains reusable GPU operations such as [`op::Identity`].
@@ -44,9 +43,8 @@
 //!
 //! # Synchronization model
 //!
-//! Value-returning algorithms produce an [`MVal`] without reading the result back. Value
-//! consumers resolve it to the representation they need; [`MVal::read`] is the explicit
-//! host synchronization boundary for device-resident values.
+//! Single-value-returning algorithms synchronize and return ordinary host values. Device-resident
+//! intermediate scalar storage remains an internal implementation detail.
 //! Logical iterator extents may remain device-resident. They are propagated
 //! internally for allocation and dispatch rather than exposed as public
 //! length or capacity queries.
@@ -59,8 +57,6 @@ pub mod vector;
 
 // Compatibility aliases keep the kernel core independent from the public
 // module layout.
-pub use api::value::MVal;
-pub(crate) use api::value::Scalar;
 pub(crate) use core::allocation::{RowAlloc, RowStorage};
 pub(crate) use core::arity::{A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13};
 pub(crate) use core::iter::Zip;
@@ -105,7 +101,7 @@ pub use api::{Error, lazy, op, util};
 pub mod prelude {
     pub use crate::{
         DeviceSlice, DeviceSliceMut, DeviceVec, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut,
-        MRadix, MStorage, MVal, MVec, flag, op, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9,
-        zip10, zip11, zip12,
+        MRadix, MStorage, MVec, flag, op, zip2, zip3, zip4, zip5, zip6, zip7, zip8, zip9, zip10,
+        zip11, zip12,
     };
 }

@@ -2,7 +2,7 @@ use cubecl::prelude::{CubeType, Runtime};
 use std::marker::PhantomData;
 
 use crate::{
-    DeviceVec, Error, Executor, MAlloc, MIter, MIterMut, MStorage, MVec, Scalar,
+    DeviceVec, Error, Executor, MAlloc, MIter, MIterMut, MStorage, MVec,
     op::{ExpandOp, UnaryOp},
 };
 
@@ -73,8 +73,8 @@ where
     let counts: DeviceVec<R, u32> =
         crate::vector::map(exec, input.clone(), Count::<Op>(PhantomData))?;
     let positions = crate::scan::inclusive_scan_u32(exec, &counts)?;
-    let output_len =
-        Scalar::<R, u32>::from_storage(crate::scan::last_u32(exec, &positions)?)?.read(exec)?;
+    let output_len_storage = crate::scan::last_u32(exec, &positions)?;
+    let output_len = crate::api::value::read::<R, u32>(exec, &output_len_storage)?;
 
     let element_offsets = exec.alloc::<u32>(offset_count);
     crate::vector::fill(exec, 0u32, element_offsets.slice_mut(..1))?;

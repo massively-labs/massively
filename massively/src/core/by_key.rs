@@ -386,7 +386,7 @@ mod tests {
         assert_eq!((seventh[299], seventh[300], seventh[599]), (2100, 7, 2100));
 
         let init: Seven = (10, 20, 30, 40, 50, 60, 70);
-        let init = exec.scalar(init).unwrap();
+        let init = crate::api::value::store(&exec, init).unwrap();
         let exclusive = exec.alloc_row::<Seven>(len);
         crate::api::algorithm::exclusive_scan_by_key_into(
             &exec,
@@ -421,7 +421,7 @@ mod tests {
             value_output.write(),
         )
         .unwrap();
-        let count = count.read(&exec).unwrap();
+        let count = crate::api::value::read::<WgpuRuntime, u32>(&exec, &count).unwrap();
         assert_eq!(count, 2);
         assert_eq!(exec.to_host(&key_output.slice(..2)).unwrap(), vec![1, 2]);
         let (first, _, _, _, _, _, seventh) = crate::MStorage::into_columns(value_output);

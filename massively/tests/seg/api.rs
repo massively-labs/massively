@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
 use massively::{
-    Executor, MIter, MStorage, MVal, lazy,
+    Executor, MIter, MStorage, lazy,
     op::BinaryPredicateOp,
     op::ExpandOp,
     op::PredicateOp,
@@ -323,7 +323,7 @@ fn segmented_algorithms_return_owned_device_results() {
 }
 
 #[test]
-fn segmented_scalar_inputs_accept_device_results_without_reading() {
+fn segmented_single_value_inputs_accept_host_results() {
     let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
     let empty = exec.alloc::<u32>(0);
     let zero = massively::vector::reduce(&exec, empty.slice(..), 0_u32, Add).unwrap();
@@ -833,10 +833,7 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
     let lengths = vector_map(&exec, rows.clone(), SliceLength).unwrap();
     assert_eq!(exec.to_host(&lengths).unwrap(), vec![0, 1, 2, 2, 1]);
     assert_eq!(
-        is_sorted(&exec, rows.clone(), LexicographicalBytes)
-            .unwrap()
-            .read(&exec)
-            .unwrap(),
+        is_sorted(&exec, rows.clone(), LexicographicalBytes).unwrap(),
         massively::flag::from_bool(true)
     );
 
@@ -847,19 +844,13 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
     fn assert_lazy_item<R: Runtime, Input: MIter<R, Item = Segment<Code>>>(_input: &Input) {}
     assert_lazy_item::<WgpuRuntime, _>(&lazy_rows);
     assert_eq!(
-        is_sorted(&exec, lazy_rows, LexicographicalCodes)
-            .unwrap()
-            .read(&exec)
-            .unwrap(),
+        is_sorted(&exec, lazy_rows, LexicographicalCodes).unwrap(),
         massively::flag::from_bool(true)
     );
 
     let middle = rows.slice(1..4);
     assert_eq!(
-        is_sorted(&exec, middle, LexicographicalBytes)
-            .unwrap()
-            .read(&exec)
-            .unwrap(),
+        is_sorted(&exec, middle, LexicographicalBytes).unwrap(),
         massively::flag::from_bool(true)
     );
 
@@ -868,10 +859,7 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
     let unsorted_offsets = exec.to_device(&[0_u32, 2, 4]);
     let unsorted = SegmentIterator::new(unsorted_values.slice(..), unsorted_offsets.slice(..));
     assert_eq!(
-        is_sorted(&exec, unsorted, LexicographicalBytes)
-            .unwrap()
-            .read(&exec)
-            .unwrap(),
+        is_sorted(&exec, unsorted, LexicographicalBytes).unwrap(),
         massively::flag::from_bool(false)
     );
 
@@ -886,10 +874,7 @@ fn segment_iterator_is_an_miter_of_shared_read_only_segments() {
         right_offsets.slice(..),
     );
     assert_eq!(
-        equal(&exec, left, right, SlicesEqual)
-            .unwrap()
-            .read(&exec)
-            .unwrap(),
+        equal(&exec, left, right, SlicesEqual).unwrap(),
         massively::flag::from_bool(true)
     );
 }

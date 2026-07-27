@@ -3,8 +3,8 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MStorage, MVec, Scalar,
-    api::iter::MStorageExtent, op::BinaryPredicateOp,
+    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MStorage, MVec, api::iter::MStorageExtent,
+    op::BinaryPredicateOp,
 };
 
 struct SetOperation<'a, R: Runtime, Left, Right, Less, const MODE: u8> {
@@ -62,7 +62,10 @@ macro_rules! set_api {
             let capacity = ($capacity)(left_len, right_len)?;
             let mut output = exec.alloc::<Item>(capacity);
             let len = $into_name(exec, left, right, less, output.slice_mut(..))?;
-            output.set_logical_extent(len.logical_extent(capacity));
+            output.set_logical_extent(crate::extent::LogicalExtent::from_device(
+                &len,
+                capacity as usize,
+            ));
             Ok(output)
         }
 
@@ -74,7 +77,7 @@ macro_rules! set_api {
             right: Right,
             less: Less,
             output: Output,
-        ) -> Result<Scalar<R, MIndex>, Error>
+        ) -> Result<MVec<R, MIndex>, Error>
         where
             R: Runtime,
             Left: MIter<R, Item = Output::Item>,
@@ -82,14 +85,12 @@ macro_rules! set_api {
             Less: BinaryPredicateOp<Left::Item>,
             Output: MIterMut<R>,
         {
-            Scalar::from_storage(output.run_output_operation(
-                SetOperation::<_, _, _, _, $mode> {
-                    exec,
-                    left,
-                    right,
-                    less,
-                },
-            )?)
+            output.run_output_operation(SetOperation::<_, _, _, _, $mode> {
+                exec,
+                left,
+                right,
+                less,
+            })
         }
     };
 }

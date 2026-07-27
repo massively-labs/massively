@@ -3,8 +3,8 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MIter, MIterMut, MStorage, MVal, MVec, Scalar,
-    api::iter::MStorageExtent, op::ReductionOp,
+    Error, Executor, MAlloc, MIter, MIterMut, MStorage, MVec, api::iter::MStorageExtent,
+    op::ReductionOp,
 };
 
 struct ScanOperation<'a, R: Runtime, Input, Op, const ADJACENT: bool> {
@@ -16,7 +16,7 @@ struct ScanOperation<'a, R: Runtime, Input, Op, const ADJACENT: bool> {
 struct ExclusiveScanOperation<'a, R: Runtime, Input, Item: MAlloc<R>, Op> {
     exec: &'a Executor<R>,
     input: Input,
-    init: Scalar<R, Item>,
+    init: MVec<R, Item>,
     op: Op,
 }
 
@@ -38,7 +38,7 @@ where
         crate::scan::exclusive_scan(
             self.exec,
             crate::api::iter::lower_fixed::<R, _>(self.input),
-            self.init.into_scratch_storage(),
+            crate::api::value::into_scratch::<R, Item>(self.init),
             self.op,
             output,
         )
@@ -216,7 +216,7 @@ where
 pub fn exclusive_scan<R, Input, Item, Op>(
     exec: &Executor<R>,
     input: Input,
-    init: impl MVal<R, Item>,
+    init: Item,
     op: Op,
 ) -> Result<MVec<R, Item>, Error>
 where
@@ -225,14 +225,14 @@ where
     Item: MAlloc<R>,
     Op: ReductionOp<Item>,
 {
-    let init = crate::api::value::materialize_value(exec, &init)?;
+    let init = crate::api::value::store(exec, init)?;
     exclusive_scan_value(exec, input, init, op)
 }
 
 fn exclusive_scan_value<R, Input, Item, Op>(
     exec: &Executor<R>,
     input: Input,
-    init: Scalar<R, Item>,
+    init: MVec<R, Item>,
     op: Op,
 ) -> Result<MVec<R, Item>, Error>
 where

@@ -3,7 +3,7 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MRadix, MStorage, MVal, MVec, Scalar,
+    Error, Executor, MAlloc, MIndex, MIter, MIterMut, MRadix, MStorage, MVec,
     api::iter::MStorageExtent, op::BinaryPredicateOp, op::ReductionOp,
 };
 
@@ -12,7 +12,7 @@ struct ByKeyScanOperation<'a, R: Runtime, Keys, Values, Equal, Item: MAlloc<R>, 
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Option<Scalar<R, Item>>,
+    init: Option<MVec<R, Item>>,
     op: Op,
 }
 
@@ -41,7 +41,7 @@ where
                 keys,
                 values,
                 self.equal,
-                init.into_scratch_storage(),
+                crate::api::value::into_scratch::<R, Item>(init),
                 self.op,
                 output,
             )
@@ -67,7 +67,7 @@ struct ReduceByKeyValueOperation<
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Scalar<R, ValueItem>,
+    init: MVec<R, ValueItem>,
     op: Op,
     key_output: KeyOutput,
 }
@@ -86,7 +86,7 @@ struct ReduceByKeyKeyOperation<
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Scalar<R, ValueItem>,
+    init: MVec<R, ValueItem>,
     op: Op,
     value_output: ValueOutput,
 }
@@ -116,7 +116,7 @@ where
             crate::api::iter::lower_fixed::<R, _>(self.keys),
             crate::api::iter::lower_fixed::<R, _>(self.values),
             self.equal,
-            self.init.into_scratch_storage(),
+            crate::api::value::into_scratch::<R, ValueItem>(self.init),
             self.op,
             key_output,
             self.value_output,
@@ -499,7 +499,7 @@ pub fn exclusive_scan_by_key<R, Keys, Values, Equal, Op>(
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: impl MVal<R, Values::Item>,
+    init: Values::Item,
     op: Op,
 ) -> Result<MVec<R, Values::Item>, Error>
 where
@@ -510,7 +510,7 @@ where
     Equal: BinaryPredicateOp<Keys::Item>,
     Op: ReductionOp<Values::Item>,
 {
-    let init = crate::api::value::materialize_value(exec, &init)?;
+    let init = crate::api::value::store(exec, init)?;
     exclusive_scan_by_key_value(exec, keys, values, equal, init, op)
 }
 
@@ -519,7 +519,7 @@ fn exclusive_scan_by_key_value<R, Keys, Values, Equal, Op>(
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Scalar<R, Values::Item>,
+    init: MVec<R, Values::Item>,
     op: Op,
 ) -> Result<MVec<R, Values::Item>, Error>
 where
@@ -550,7 +550,7 @@ pub(crate) fn exclusive_scan_by_key_into<R, Keys, Values, Item, Equal, Op, Outpu
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Scalar<R, Values::Item>,
+    init: MVec<R, Values::Item>,
     op: Op,
     output: Output,
 ) -> Result<(), Error>
@@ -620,7 +620,7 @@ pub fn reduce_by_key<R, Keys, Values, KeyItem, ValueItem, Equal, Op>(
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: impl MVal<R, ValueItem>,
+    init: ValueItem,
     op: Op,
 ) -> Result<(MVec<R, KeyItem>, MVec<R, ValueItem>), Error>
 where
@@ -632,7 +632,7 @@ where
     Equal: BinaryPredicateOp<KeyItem>,
     Op: ReductionOp<ValueItem>,
 {
-    let init = crate::api::value::materialize_value(exec, &init)?;
+    let init = crate::api::value::store(exec, init)?;
     reduce_by_key_value(exec, keys, values, equal, init, op)
 }
 
@@ -641,7 +641,7 @@ fn reduce_by_key_value<R, Keys, Values, KeyItem, ValueItem, Equal, Op>(
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Scalar<R, ValueItem>,
+    init: MVec<R, ValueItem>,
     op: Op,
 ) -> Result<(MVec<R, KeyItem>, MVec<R, ValueItem>), Error>
 where
@@ -673,7 +673,7 @@ where
         key_output.slice_mut(..),
         value_output.slice_mut(..),
     )?;
-    let extent = len.logical_extent(capacity);
+    let extent = crate::extent::LogicalExtent::from_device(&len, capacity as usize);
     key_output.set_logical_extent(extent.clone());
     value_output.set_logical_extent(extent);
     Ok((key_output, value_output))
@@ -696,11 +696,11 @@ pub(crate) fn reduce_by_key_into<
     keys: Keys,
     values: Values,
     equal: Equal,
-    init: Scalar<R, ValueItem>,
+    init: MVec<R, ValueItem>,
     op: Op,
     key_output: KeyOutput,
     value_output: ValueOutput,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Keys: MIter<R, Item = KeyItem>,
@@ -712,17 +712,15 @@ where
     KeyOutput: MIterMut<R, Item = KeyItem>,
     ValueOutput: MIterMut<R, Item = ValueItem>,
 {
-    Scalar::from_storage(
-        value_output.run_output_operation(ReduceByKeyValueOperation {
-            exec,
-            keys,
-            values,
-            equal,
-            init,
-            op,
-            key_output,
-        })?,
-    )
+    value_output.run_output_operation(ReduceByKeyValueOperation {
+        exec,
+        keys,
+        values,
+        equal,
+        init,
+        op,
+        key_output,
+    })
 }
 
 /// Keeps the first value of every adjacent equal-key run.
@@ -781,7 +779,10 @@ where
     }
     let mut value_output = exec.alloc::<Values::Item>(capacity);
     let len = unique_by_key_into(exec, keys, values, equal, value_output.slice_mut(..))?;
-    value_output.set_logical_extent(len.logical_extent(capacity));
+    value_output.set_logical_extent(crate::extent::LogicalExtent::from_device(
+        &len,
+        capacity as usize,
+    ));
     Ok(value_output)
 }
 
@@ -793,7 +794,7 @@ pub(crate) fn unique_by_key_into<R, Keys, Values, Equal, ValueOutput>(
     values: Values,
     equal: Equal,
     value_output: ValueOutput,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Keys: MIter<R>,
@@ -801,10 +802,10 @@ where
     Equal: BinaryPredicateOp<Keys::Item>,
     ValueOutput: MIterMut<R>,
 {
-    Scalar::from_storage(value_output.run_output_operation(UniqueByKeyOperation {
+    value_output.run_output_operation(UniqueByKeyOperation {
         exec,
         keys,
         values,
         equal,
-    })?)
+    })
 }

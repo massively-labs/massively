@@ -430,7 +430,7 @@ mod tests {
             union.slice_mut(..),
         )
         .unwrap();
-        let union_len = union_len.read(&exec).unwrap();
+        let union_len = crate::api::value::read::<WgpuRuntime, u32>(&exec, &union_len).unwrap();
         assert_eq!(
             exec.to_host(&union.slice(..union_len)).unwrap(),
             vec![1, 2, 2, 2, 3, 4, 4]
@@ -445,7 +445,8 @@ mod tests {
             intersection.slice_mut(..),
         )
         .unwrap();
-        let intersection_len = intersection_len.read(&exec).unwrap();
+        let intersection_len =
+            crate::api::value::read::<WgpuRuntime, u32>(&exec, &intersection_len).unwrap();
         assert_eq!(
             exec.to_host(&intersection.slice(..intersection_len))
                 .unwrap(),
@@ -461,7 +462,8 @@ mod tests {
             difference.slice_mut(..),
         )
         .unwrap();
-        let difference_len = difference_len.read(&exec).unwrap();
+        let difference_len =
+            crate::api::value::read::<WgpuRuntime, u32>(&exec, &difference_len).unwrap();
         assert_eq!(
             exec.to_host(&difference.slice(..difference_len)).unwrap(),
             vec![1, 2]

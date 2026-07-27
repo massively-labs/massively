@@ -1,7 +1,7 @@
 use cubecl::prelude::{CubeType, Runtime};
 
 use crate::{
-    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVal, MVec, Scalar,
+    Error, Executor, MAlloc, MFlag, MIndex, MIter, MIterMut, MStorage, MVec,
     api::iter::MStorageExtent, op::PredicateOp, op::UnaryOp,
 };
 
@@ -44,7 +44,7 @@ struct PartitionOperation<'a, R: Runtime, Input, Pred> {
 
 struct ReplaceWhereOperation<'a, R: Runtime, Item: MAlloc<R>, Stencil> {
     exec: &'a Executor<R>,
-    value: Scalar<R, Item>,
+    value: MVec<R, Item>,
     stencil: Stencil,
 }
 
@@ -64,7 +64,7 @@ where
     {
         crate::selection::replace_where(
             self.exec,
-            self.value.into_scratch_storage(),
+            crate::api::value::into_scratch::<R, Item>(self.value),
             crate::api::iter::lower::<R, _>(self.stencil),
             output,
         )
@@ -157,7 +157,10 @@ where
     let capacity = input.capacity()?;
     let mut output = exec.alloc::<Item>(capacity);
     let len = copy_where_into(exec, input, stencil, output.slice_mut(..))?;
-    output.set_logical_extent(len.logical_extent(capacity));
+    output.set_logical_extent(crate::extent::LogicalExtent::from_device(
+        &len,
+        capacity as usize,
+    ));
     Ok(output)
 }
 
@@ -168,20 +171,18 @@ pub(crate) fn copy_where_into<R, Input, Stencil, Output>(
     input: Input,
     stencil: Stencil,
     output: Output,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
     Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
-    Scalar::from_storage(
-        output.run_output_operation(CopyWhereOperation::<_, _, _, false> {
-            exec,
-            input,
-            stencil,
-        })?,
-    )
+    output.run_output_operation(CopyWhereOperation::<_, _, _, false> {
+        exec,
+        input,
+        stencil,
+    })
 }
 
 /// Copies rows whose stencil is false.
@@ -213,7 +214,10 @@ where
     let capacity = input.capacity()?;
     let mut output = exec.alloc::<Item>(capacity);
     let len = remove_where_into(exec, input, stencil, output.slice_mut(..))?;
-    output.set_logical_extent(len.logical_extent(capacity));
+    output.set_logical_extent(crate::extent::LogicalExtent::from_device(
+        &len,
+        capacity as usize,
+    ));
     Ok(output)
 }
 
@@ -224,20 +228,18 @@ pub(crate) fn remove_where_into<R, Input, Stencil, Output>(
     input: Input,
     stencil: Stencil,
     output: Output,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
     Stencil: MIter<R, Item = MFlag>,
     Output: MIterMut<R>,
 {
-    Scalar::from_storage(
-        output.run_output_operation(CopyWhereOperation::<_, _, _, true> {
-            exec,
-            input,
-            stencil,
-        })?,
-    )
+    output.run_output_operation(CopyWhereOperation::<_, _, _, true> {
+        exec,
+        input,
+        stencil,
+    })
 }
 
 /// Stably partitions passing items before failing items.
@@ -249,7 +251,7 @@ where
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, MVal, op, vector::partition};
+/// use massively::{Executor, op, vector::partition};
 ///
 /// struct Even;
 ///
@@ -264,14 +266,14 @@ where
 /// let input = exec.to_device(&[1_u32, 2, 3, 4]);
 /// let (output, boundary) = partition(&exec, input.slice(..), Even).unwrap();
 ///
-/// assert_eq!(boundary.read(&exec).unwrap(), 2);
+/// assert_eq!(boundary, 2);
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![2, 4, 1, 3]);
 /// ```
 pub fn partition<R, Input, Item, Pred>(
     exec: &Executor<R>,
     input: Input,
     pred: Pred,
-) -> Result<(MVec<R, Item>, impl MVal<R, MIndex> + Clone), Error>
+) -> Result<(MVec<R, Item>, MIndex), Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Item>,
@@ -281,6 +283,7 @@ where
     let len = input.capacity()?;
     let output = exec.alloc::<Item>(len);
     let boundary = partition_into(exec, input, pred, output.slice_mut(..))?;
+    let boundary = crate::api::value::read::<R, MIndex>(exec, &boundary)?;
     Ok((output, boundary))
 }
 
@@ -291,14 +294,14 @@ pub(crate) fn partition_into<R, Input, Output, Pred>(
     input: Input,
     pred: Pred,
     output: Output,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: MIter<R, Item = Output::Item>,
     Output: MIterMut<R>,
     Pred: PredicateOp<Input::Item>,
 {
-    Scalar::from_storage(output.run_output_operation(PartitionOperation { exec, input, pred })?)
+    output.run_output_operation(PartitionOperation { exec, input, pred })
 }
 
 /// Fills every output item with one value.
@@ -315,25 +318,19 @@ where
 ///
 /// assert_eq!(exec.to_host(&output).unwrap(), vec![7, 7, 7, 7]);
 /// ```
-pub fn fill<R, Output>(
-    exec: &Executor<R>,
-    value: impl MVal<R, Output::Item>,
-    output: Output,
-) -> Result<(), Error>
+pub fn fill<R, Output>(exec: &Executor<R>, value: Output::Item, output: Output) -> Result<(), Error>
 where
     R: Runtime,
     Output: MIterMut<R>,
     Output::Item: MAlloc<R>,
 {
-    output.run_output_operation(crate::api::iter::FillValueOperation {
-        exec,
-        value: value.as_iter(),
-    })
+    let value = crate::api::value::store(exec, value)?;
+    fill_value(exec, &value, output)
 }
 
 pub(crate) fn fill_value<R, Output>(
     exec: &Executor<R>,
-    value: &Scalar<R, Output::Item>,
+    value: &MVec<R, Output::Item>,
     output: Output,
 ) -> Result<(), Error>
 where
@@ -343,7 +340,7 @@ where
 {
     output.run_output_operation(crate::api::iter::FillValueOperation {
         exec,
-        value: value.as_iter(),
+        value: value.slice(..),
     })
 }
 
@@ -365,7 +362,7 @@ where
 /// ```
 pub fn replace_where<R, Stencil, Output>(
     exec: &Executor<R>,
-    value: impl MVal<R, Output::Item>,
+    value: Output::Item,
     stencil: Stencil,
     output: Output,
 ) -> Result<(), Error>
@@ -375,13 +372,13 @@ where
     Output: MIterMut<R>,
     Output::Item: MAlloc<R>,
 {
-    let value = crate::api::value::materialize_value(exec, &value)?;
+    let value = crate::api::value::store(exec, value)?;
     replace_where_value(exec, value, stencil, output)
 }
 
 fn replace_where_value<R, Stencil, Output>(
     exec: &Executor<R>,
-    value: Scalar<R, Output::Item>,
+    value: MVec<R, Output::Item>,
     stencil: Stencil,
     output: Output,
 ) -> Result<(), Error>

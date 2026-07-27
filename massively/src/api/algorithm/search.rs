@@ -1,55 +1,17 @@
 use cubecl::prelude::*;
 
-use crate::{
-    Error, Executor, MFlag, MIndex, MIter, MVal, MVec, Scalar,
-    op::{BinaryPredicateOp, UnaryOp},
-};
-
-struct EqualLengthResult;
-
-#[cubecl::cube]
-impl UnaryOp<(MIndex, MIndex)> for EqualLengthResult {
-    type Output = MFlag;
-
-    fn apply(input: (MIndex, MIndex)) -> MFlag {
-        crate::flag::from_bool(input.0 >= input.1)
-    }
-}
-
-struct OptionalMismatch;
-
-#[cubecl::cube]
-impl UnaryOp<(MIndex, MIndex)> for OptionalMismatch {
-    type Output = MIndex;
-
-    fn apply(input: (MIndex, MIndex)) -> MIndex {
-        if input.0 < input.1 {
-            input.0
-        } else {
-            MIndex::MAX
-        }
-    }
-}
-
-struct RequiredMismatch;
-
-#[cubecl::cube]
-impl UnaryOp<(MIndex, MIndex)> for RequiredMismatch {
-    type Output = MIndex;
-
-    fn apply(input: (MIndex, MIndex)) -> MIndex {
-        input.0.min(input.1)
-    }
-}
+use crate::{Error, Executor, MFlag, MIndex, MIter, MVec, op::BinaryPredicateOp};
 
 /// Finds the first source item equal to any needle.
+///
+/// This operation synchronizes to resolve the optional index on the host.
 ///
 /// # Examples
 ///
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{op, Executor, MVal, vector::find_first_of};
+/// use massively::{op, Executor, vector::find_first_of};
 ///
 /// struct Equal;
 ///
@@ -66,27 +28,27 @@ impl UnaryOp<(MIndex, MIndex)> for RequiredMismatch {
 ///
 /// let index = find_first_of(&exec, source.slice(..), needles.slice(..), Equal).unwrap();
 ///
-/// assert_eq!(index.read(&exec).unwrap(), Some(2));
+/// assert_eq!(index, Some(2));
 /// ```
 pub fn find_first_of<R, Source, Needles, Equal>(
     exec: &Executor<R>,
     source: Source,
     needles: Needles,
     equal: Equal,
-) -> Result<impl MVal<R, Option<MIndex>>, Error>
+) -> Result<Option<MIndex>, Error>
 where
     R: Runtime,
     Source: MIter<R>,
     Needles: MIter<R, Item = Source::Item>,
     Equal: BinaryPredicateOp<Source::Item>,
 {
-    Ok(crate::search::find_first_of(
+    let value = crate::search::find_first_of(
         exec,
         crate::api::iter::lower_fixed::<R, _>(source),
         crate::api::iter::lower_fixed::<R, _>(needles),
         equal,
-    )?
-    .into_optional_index())
+    )?;
+    crate::api::value::read_optional_index(exec, &value)
 }
 
 /// Finds the lower bound of each value.
@@ -190,7 +152,7 @@ where
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{op, Executor, MVal, vector::equal};
+/// use massively::{op, Executor, vector::equal};
 ///
 /// struct Equal;
 ///
@@ -208,8 +170,6 @@ where
 /// assert!(massively::flag::is_set(
 ///     equal(&exec, left.slice(..), right.slice(..), Equal)
 ///         .unwrap()
-///         .read(&exec)
-///         .unwrap()
 /// ));
 /// ```
 pub fn equal<R, Left, Right, Equal>(
@@ -217,7 +177,7 @@ pub fn equal<R, Left, Right, Equal>(
     left: Left,
     right: Right,
     equal: Equal,
-) -> Result<impl MVal<R, MFlag> + Clone, Error>
+) -> Result<MFlag, Error>
 where
     R: Runtime,
     Left: MIter<R>,
@@ -227,7 +187,7 @@ where
     let left_len = left.capacity()?;
     let right_len = right.capacity()?;
     if left_len != right_len {
-        return exec.scalar(crate::flag::from_bool(false));
+        return Ok(crate::flag::from_bool(false));
     }
     let mismatch = crate::search::equal(
         exec,
@@ -235,22 +195,20 @@ where
         crate::api::iter::lower_fixed::<R, _>(right),
         equal,
     )?;
-    let output = crate::vector::map(
-        exec,
-        crate::zip2(mismatch.as_iter(), crate::lazy::constant(left_len).take(1)),
-        EqualLengthResult,
-    )?;
-    Scalar::from_storage(output)
+    let mismatch = crate::api::value::read::<R, MIndex>(exec, &mismatch)?;
+    Ok(crate::flag::from_bool(mismatch >= left_len))
 }
 
 /// Returns the first mismatch.
+///
+/// This operation synchronizes to resolve the optional index on the host.
 ///
 /// # Examples
 ///
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{op, Executor, MVal, vector::mismatch};
+/// use massively::{op, Executor, vector::mismatch};
 ///
 /// struct Equal;
 ///
@@ -266,10 +224,7 @@ where
 /// let right = exec.to_device(&[1_u32, 4, 3]);
 ///
 /// assert_eq!(
-///     mismatch(&exec, left.slice(..), right.slice(..), Equal)
-///         .unwrap()
-///         .read(&exec)
-///         .unwrap(),
+///     mismatch(&exec, left.slice(..), right.slice(..), Equal).unwrap(),
 ///     Some(1)
 /// );
 /// ```
@@ -278,7 +233,7 @@ pub fn mismatch<R, Left, Right, Equal>(
     left: Left,
     right: Right,
     equal: Equal,
-) -> Result<impl MVal<R, Option<MIndex>>, Error>
+) -> Result<Option<MIndex>, Error>
 where
     R: Runtime,
     Left: MIter<R>,
@@ -294,13 +249,14 @@ where
         crate::api::iter::lower_fixed::<R, _>(right),
         equal,
     )?;
-    let input = crate::zip2(index.as_iter(), crate::lazy::constant(shared_len).take(1));
-    let encoded = if left_len == right_len {
-        crate::vector::map(exec, input, OptionalMismatch)?
+    let index = crate::api::value::read::<R, MIndex>(exec, &index)?;
+    if index < shared_len {
+        Ok(Some(index))
+    } else if left_len == right_len {
+        Ok(None)
     } else {
-        crate::vector::map(exec, input, RequiredMismatch)?
-    };
-    Ok(Scalar::<R, MIndex>::from_storage(encoded)?.into_optional_index())
+        Ok(Some(shared_len))
+    }
 }
 
 /// Lexicographically compares two ranges.
@@ -310,7 +266,7 @@ where
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{op, Executor, MVal, vector::lexicographical_compare};
+/// use massively::{op, Executor, vector::lexicographical_compare};
 ///
 /// struct Less;
 ///
@@ -328,8 +284,6 @@ where
 /// assert!(massively::flag::is_set(
 ///     lexicographical_compare(&exec, left.slice(..), right.slice(..), Less)
 ///         .unwrap()
-///         .read(&exec)
-///         .unwrap()
 /// ));
 /// ```
 pub fn lexicographical_compare<R, Left, Right, Less>(
@@ -337,17 +291,18 @@ pub fn lexicographical_compare<R, Left, Right, Less>(
     left: Left,
     right: Right,
     less: Less,
-) -> Result<impl MVal<R, MFlag> + Clone, Error>
+) -> Result<MFlag, Error>
 where
     R: Runtime,
     Left: MIter<R>,
     Right: MIter<R, Item = Left::Item>,
     Less: BinaryPredicateOp<Left::Item>,
 {
-    crate::search::lexicographical_compare(
+    let value = crate::search::lexicographical_compare(
         exec,
         crate::api::iter::lower_fixed::<R, _>(left),
         crate::api::iter::lower_fixed::<R, _>(right),
         less,
-    )
+    )?;
+    crate::api::value::read::<R, MFlag>(exec, &value)
 }

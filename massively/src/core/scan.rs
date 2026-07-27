@@ -1469,11 +1469,11 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[1_u32, 2, 3, 4]);
         let output = exec.to_device(&[99_u32; 6]);
-        let init = exec.scalar(10_u32).unwrap();
+        let init = crate::api::value::store(&exec, 10_u32).unwrap();
         exclusive_scan(
             &exec,
             input.column(),
-            init.into_scratch_storage(),
+            crate::api::value::into_scratch::<WgpuRuntime, u32>(init),
             Sum,
             output.slice_mut_usize(1..5),
         )
@@ -1487,11 +1487,11 @@ mod tests {
         let len = 70_001usize;
         let input = exec.to_device(&vec![1_u32; len]);
         let output = exec.to_device(&vec![0_u32; len]);
-        let init = exec.scalar(10_u32).unwrap();
+        let init = crate::api::value::store(&exec, 10_u32).unwrap();
         exclusive_scan(
             &exec,
             input.column(),
-            init.into_scratch_storage(),
+            crate::api::value::into_scratch::<WgpuRuntime, u32>(init),
             Sum,
             output.slice_mut_usize(..),
         )
@@ -1502,11 +1502,11 @@ mod tests {
         }
 
         let ordered = exec.to_device(&vec![0_u32; 600]);
-        let init = exec.scalar(42_u32).unwrap();
+        let init = crate::api::value::store(&exec, 42_u32).unwrap();
         exclusive_scan(
             &exec,
             input.slice_usize(..600),
-            init.into_scratch_storage(),
+            crate::api::value::into_scratch::<WgpuRuntime, u32>(init),
             TakeLeft,
             ordered.slice_mut_usize(..),
         )
@@ -1548,11 +1548,11 @@ mod tests {
         let input = Permute::new(seven, Counting::new(0, 4));
         let output = exec.alloc_row::<Seven>(4);
         let init: Seven = (10, 20, 30, 40, 50, 60, 70);
-        let init = exec.scalar(init).unwrap();
+        let init = crate::api::value::store(&exec, init).unwrap();
         exclusive_scan(
             &exec,
             input,
-            init.into_scratch_storage(),
+            crate::api::value::into_scratch::<WgpuRuntime, Seven>(init),
             SumSevenItems,
             output.write(),
         )

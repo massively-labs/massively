@@ -5,8 +5,8 @@ use core::marker::PhantomData;
 use cubecl::prelude::*;
 
 use crate::{
-    A13, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MStorageElement, ReadExpression,
-    Scalar,
+    A13, DeviceVec, Dispatch, Error, Executor, MFlag, MIndex, MStorageElement, MVec,
+    ReadExpression,
     arg_reduce::{ArgReduceDispatch, ArgReductionOp, arg_reduce},
     eval::Eval13,
     launch::cube_count_1d,
@@ -991,12 +991,12 @@ pub(crate) fn adjacent_find<R, Input, Equal>(
     exec: &Executor<R>,
     input: Input,
     _equal: Equal,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: AdjacentFindInput<R, Equal>,
 {
-    Scalar::from_storage(input.first_adjacent_match(exec)?)
+    input.first_adjacent_match(exec)
 }
 
 /// Internal public-API capability for stable adjacent deduplication.
@@ -1075,12 +1075,12 @@ pub(crate) fn is_sorted_until<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: SortedInput<R, Less>,
 {
-    Scalar::from_storage(input.first_sorted_break(exec)?)
+    input.first_sorted_break(exec)
 }
 
 /// Returns the first sorted break, or a sentinel when the input is sorted.
@@ -1088,12 +1088,12 @@ pub(crate) fn is_sorted<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<Scalar<R, u32>, Error>
+) -> Result<MVec<R, u32>, Error>
 where
     R: Runtime,
     Input: SortedInput<R, Less>,
 {
-    Scalar::from_storage(input.first_sorted_break(exec)?)
+    input.first_sorted_break(exec)
 }
 
 /// Internal public-API capability for extremum queries.
@@ -1131,12 +1131,12 @@ pub(crate) fn min_element<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: ExtremumInput<R, Less>,
 {
-    Scalar::from_storage(input.first_minimum(exec)?)
+    input.first_minimum(exec)
 }
 
 /// Returns the first maximum element index.
@@ -1144,12 +1144,12 @@ pub(crate) fn max_element<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<Scalar<R, MIndex>, Error>
+) -> Result<MVec<R, MIndex>, Error>
 where
     R: Runtime,
     Input: ExtremumInput<R, Less>,
 {
-    Scalar::from_storage(input.first_maximum(exec)?)
+    input.first_maximum(exec)
 }
 
 /// Returns the last minimum and first maximum indices.
@@ -1157,13 +1157,13 @@ pub(crate) fn minmax_element<R, Input, Less>(
     exec: &Executor<R>,
     input: Input,
     _less: Less,
-) -> Result<(Scalar<R, MIndex>, Scalar<R, MIndex>), Error>
+) -> Result<(MVec<R, MIndex>, MVec<R, MIndex>), Error>
 where
     R: Runtime,
     Input: ExtremumInput<R, Less>,
 {
-    let min = Scalar::from_storage(input.last_minimum(exec)?)?;
-    let max = Scalar::from_storage(input.first_maximum(exec)?)?;
+    let min = input.last_minimum(exec)?;
+    let max = input.first_maximum(exec)?;
     Ok((min, max))
 }
 
@@ -1237,10 +1237,11 @@ mod tests {
             Permute::new(seven, Counting::new(0, 4))
         };
         assert_eq!(
-            is_sorted(&exec, make_input(), LexicographicLess)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::api::value::read::<WgpuRuntime, MIndex>(
+                &exec,
+                &is_sorted(&exec, make_input(), LexicographicLess).unwrap(),
+            )
+            .unwrap(),
             u32::MAX
         );
 
@@ -1265,10 +1266,11 @@ mod tests {
             Counting::new(0, 4),
         );
         assert_eq!(
-            is_sorted_until(&exec, bad_input, LexicographicLess)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::api::value::read::<WgpuRuntime, MIndex>(
+                &exec,
+                &is_sorted_until(&exec, bad_input, LexicographicLess).unwrap(),
+            )
+            .unwrap(),
             2
         );
     }
@@ -1354,10 +1356,11 @@ mod tests {
         };
 
         assert_eq!(
-            adjacent_find(&exec, make_input(), EqualSeven)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::api::value::read::<WgpuRuntime, MIndex>(
+                &exec,
+                &adjacent_find(&exec, make_input(), EqualSeven).unwrap(),
+            )
+            .unwrap(),
             0
         );
         let output = exec.alloc_row::<Seven>(5);
@@ -1373,21 +1376,29 @@ mod tests {
         let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
         let input = exec.to_device(&[2_u32, 1, 3, 1, 3]);
         assert_eq!(
-            min_element(&exec, input.column(), LessU32)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::api::value::read::<WgpuRuntime, MIndex>(
+                &exec,
+                &min_element(&exec, input.column(), LessU32).unwrap(),
+            )
+            .unwrap(),
             1
         );
         assert_eq!(
-            max_element(&exec, input.column(), LessU32)
-                .unwrap()
-                .read(&exec)
-                .unwrap(),
+            crate::api::value::read::<WgpuRuntime, MIndex>(
+                &exec,
+                &max_element(&exec, input.column(), LessU32).unwrap(),
+            )
+            .unwrap(),
             2
         );
         let (minimum, maximum) = minmax_element(&exec, input.column(), LessU32).unwrap();
-        assert_eq!(minimum.read(&exec).unwrap(), 3);
-        assert_eq!(maximum.read(&exec).unwrap(), 2);
+        assert_eq!(
+            crate::api::value::read::<WgpuRuntime, MIndex>(&exec, &minimum).unwrap(),
+            3
+        );
+        assert_eq!(
+            crate::api::value::read::<WgpuRuntime, MIndex>(&exec, &maximum).unwrap(),
+            2
+        );
     }
 }

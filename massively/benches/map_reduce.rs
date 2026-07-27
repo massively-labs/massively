@@ -3,7 +3,7 @@ use std::time::Duration;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-use massively::{Executor, MVal, lazy, op::ReductionOp, op::UnaryOp, vector::reduce, zip2, zip3};
+use massively::{Executor, lazy, op::ReductionOp, op::UnaryOp, vector::reduce, zip2, zip3};
 
 const SIZES: &[usize] = &[256 * 1024, 1024 * 1024, 16 * 1024 * 1024];
 
@@ -64,12 +64,7 @@ fn bench_map_reduce(c: &mut Criterion) {
         column_group.bench_function(BenchmarkId::new("gpu", len), |b| {
             b.iter(|| {
                 let input = lazy::map(values.slice(..), MulTwo);
-                black_box(
-                    reduce(&exec, input, init.clone(), Sum)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
+                black_box(reduce(&exec, input, init.clone(), Sum).unwrap())
             })
         });
     }
@@ -87,12 +82,7 @@ fn bench_map_reduce(c: &mut Criterion) {
                     zip2(black_box(left.slice(..)), black_box(right.slice(..))),
                     AddPair,
                 );
-                black_box(
-                    reduce(&exec, input, init.clone(), Sum)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
+                black_box(reduce(&exec, input, init.clone(), Sum).unwrap())
             })
         });
     }
@@ -115,12 +105,7 @@ fn bench_map_reduce(c: &mut Criterion) {
                     ),
                     AddTriple,
                 );
-                black_box(
-                    reduce(&exec, input, init.clone(), Sum)
-                        .unwrap()
-                        .read(&exec)
-                        .unwrap(),
-                )
+                black_box(reduce(&exec, input, init.clone(), Sum).unwrap())
             })
         });
     }
