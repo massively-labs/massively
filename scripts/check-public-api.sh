@@ -71,7 +71,7 @@ for algorithm in "${algorithms[@]}"; do
 done
 
 host_value_algorithms=(
-    all_of any_of count_if equal is_partitioned is_sorted is_sorted_until length
+    all_of any_of count count_if equal is_partitioned is_sorted is_sorted_until
     lexicographical_compare none_of partition reduce
 )
 

@@ -43,14 +43,14 @@ macro_rules! predicate_api {
 /// ```
 /// use cubecl::prelude::*;
 /// use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-/// use massively::{Executor, vector::length};
+/// use massively::{Executor, vector::count};
 ///
 /// let exec = Executor::<WgpuRuntime>::new(WgpuDevice::DefaultDevice);
 /// let input = exec.to_device(&[1_u32, 2, 3, 4]);
 ///
-/// assert_eq!(length(&exec, input.slice(..)).unwrap(), 4);
+/// assert_eq!(count(&exec, input.slice(..)).unwrap(), 4);
 /// ```
-pub fn length<R, Input>(exec: &Executor<R>, input: Input) -> Result<MIndex, Error>
+pub fn count<R, Input>(exec: &Executor<R>, input: Input) -> Result<MIndex, Error>
 where
     R: Runtime,
     Input: MIter<R>,

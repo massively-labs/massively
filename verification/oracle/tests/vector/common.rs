@@ -122,7 +122,7 @@ pub fn logical_len<Storage>(exec: &Executor<WgpuRuntime>, storage: &Storage) -> 
 where
     Storage: MStorage<WgpuRuntime>,
 {
-    vector::length(exec, storage.slice(..)).unwrap() as usize
+    vector::count(exec, storage.slice(..)).unwrap() as usize
 }
 
 pub fn read_value<T>(_exec: &Executor<WgpuRuntime>, value: T) -> T {

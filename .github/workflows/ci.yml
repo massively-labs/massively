@@ -29,7 +29,7 @@ jobs:
         working-directory: verification
         run: |
           docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-            -v "$PWD:/workspace" -w /workspace/traversal-algebra/proof \
+            -v "$PWD:/workspace" -w /workspace/proof \
             massively-verification:lean-4.32.0 bash -c 'lake build'
 
   test:
